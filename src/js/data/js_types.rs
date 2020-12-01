@@ -33,7 +33,7 @@ pub trait JsNext {
 pub fn next_done() -> Box<dyn JsNext> {
     struct DoneNext {}
     impl JsNext for DoneNext {
-        fn step(self, n: u64) -> ExecResult {
+        fn step(self, _n: u64) -> ExecResult {
             ExecResult::Done
         }
     }
@@ -43,7 +43,7 @@ pub fn next_done() -> Box<dyn JsNext> {
 pub fn next_err() -> Box<dyn JsNext> {
     struct ErrNext {}
     impl JsNext for ErrNext {
-        fn step(self, n: u64) -> ExecResult {
+        fn step(self, _n: u64) -> ExecResult {
             ExecResult::Errored
         }
     }

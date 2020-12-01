@@ -1,3 +1,3 @@
-mod js_code;
-mod js_execution;
-mod js_types;
+pub mod js_code;
+pub mod js_execution;
+pub mod js_types;

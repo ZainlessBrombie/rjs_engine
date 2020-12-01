@@ -1,8 +1,7 @@
 use crate::js::data::js_types::JsValue;
 use gc::{Finalize, Trace};
 use gc::{Gc, GcCell};
-use std::borrow::{Borrow, BorrowMut};
-use std::collections::HashSet;
+use std::borrow::Borrow;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -13,7 +12,7 @@ pub struct EngineState {
 }
 
 impl EngineState {
-    fn run_queue(&mut self, ticks: u64) {}
+    fn run_queue(&mut self, _ticks: u64) {}
 }
 
 pub struct AsyncStack {
@@ -147,7 +146,7 @@ impl FnOp {
         }
     }
 
-    fn run(mut self, max_cost: u64) -> FnOpResult {
+    fn run(self, max_cost: u64) -> FnOpResult {
         if max_cost == 0 {
             return FnOpResult::Ongoing {
                 cost: 0,
@@ -156,7 +155,7 @@ impl FnOp {
         }
         match self {
             FnOp::Assign { target, what } => {
-                let mut result = what.run(max_cost - 1);
+                let result = what.run(max_cost - 1);
                 match result {
                     FnOpResult::Throw { .. } => {
                         return result;
@@ -166,7 +165,7 @@ impl FnOp {
                     }
                     FnOpResult::Ongoing { cost, next } => {
                         return FnOpResult::Ongoing {
-                            cost: 0,
+                            cost,
                             next: FnOp::Assign {
                                 target,
                                 what: Box::from(next),
@@ -217,12 +216,12 @@ impl FnOp {
             FnOp::ReadVar { which } => {
                 return FnOpResult::Value {
                     cost: 1,
-                    what: Deref::deref((&GcCell::borrow(&which.value))).clone(),
+                    what: Deref::deref(&GcCell::borrow(&which.value)).clone(),
                 }
             }
             FnOp::CallFunction {
                 on,
-                mut arg_vars,
+                arg_vars,
                 mut arg_fillers,
             } => {
                 if arg_fillers.is_empty() {
@@ -237,7 +236,7 @@ impl FnOp {
                         }
                         FnOpResult::Throw { .. } => result,
                         FnOpResult::Return { .. } => result,
-                        FnOpResult::Value { cost, mut what } => {
+                        FnOpResult::Value { cost, what } => {
                             let temp_var = JsVar::new(Rc::new("#result_holder#".into()));
                             FnOpResult::Call {
                                 cost: cost + 1,
@@ -247,7 +246,7 @@ impl FnOp {
                                 next: FnOp::ReadVar { which: temp_var },
                             }
                         }
-                        FnOpResult::Ongoing { cost, mut next } => FnOpResult::Ongoing {
+                        FnOpResult::Ongoing { cost, next } => FnOpResult::Ongoing {
                             cost,
                             next: FnOp::CallFunction {
                                 on: Box::from(next),
@@ -322,8 +321,8 @@ impl FnOp {
                 };
             }
             FnOp::Deref {
-                from,
-                key,
+                from: _,
+                key: _,
                 from_store,
                 key_store,
             } => {
@@ -354,7 +353,7 @@ impl FnOp {
                                     ),
                                 };
                             }
-                            JsValue::Number(n) => {
+                            JsValue::Number(_) => {
                                 let temp_var = JsVar::new(Rc::new("#temp_var#".into()));
                                 return FnOpResult::LoadGlobal {
                                     cost: 1,
@@ -442,9 +441,9 @@ impl FnOp {
                             }
                         }
                     }
-                    FnOpResult::Ongoing { cost, mut next } => {
+                    FnOpResult::Ongoing { cost, next } => {
                         return FnOpResult::Ongoing {
-                            cost: cost,
+                            cost,
                             next: FnOp::IfElse {
                                 condition: Box::from(next),
                                 if_block,

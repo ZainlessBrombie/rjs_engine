@@ -5,13 +5,9 @@ use crate::js::data::js_types::JsNext;
 use std::io::Write;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
-use std::sync::Mutex;
-use swc_common::errors::{DiagnosticBuilder, Emitter, EmitterWriter};
+use swc_common::errors::{DiagnosticBuilder, Emitter};
 use swc_common::sync::Lrc;
-use swc_common::{
-    errors::{ColorConfig, Handler},
-    FileName, FilePathMapping, SourceMap,
-};
+use swc_common::{errors::Handler, FileName, SourceMap};
 use swc_ecma_ast::{Module, ModuleItem, Stmt};
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax};
 
@@ -53,7 +49,7 @@ impl JsEngine {
 
         for mod_item in module.body.iter() {
             match mod_item {
-                ModuleItem::ModuleDecl(declr) => {
+                ModuleItem::ModuleDecl(_declr) => {
                     println!("Note: Skipping module Decl")
                 }
                 ModuleItem::Stmt(stmt) => {
@@ -64,7 +60,7 @@ impl JsEngine {
         unimplemented!()
     }
 
-    fn ingest_statement(&self, prev: Box<dyn JsNext>, stmt: &Stmt) -> Box<dyn JsNext> {
+    fn ingest_statement(&self, _prev: Box<dyn JsNext>, stmt: &Stmt) -> Box<dyn JsNext> {
         match stmt {
             Stmt::Block(_) => {}
             Stmt::Empty(_) => {}
@@ -102,7 +98,7 @@ impl Write for TempFix {
     }
 }
 
-fn m1() {
+pub fn m1() {
     let cm: Lrc<SourceMap> = Default::default();
     let handler = Handler::with_emitter(true, false, Box::new(Empty {}));
     let fm = cm.new_source_file(
@@ -121,7 +117,7 @@ fn m1() {
         e.into_diagnostic(&handler).emit();
     }
 
-    let module = parser
+    let _module = parser
         .parse_module()
         .map_err(|err| err.into_diagnostic(&handler).emit())
         .unwrap();
