@@ -2,9 +2,11 @@ extern crate swc_ecma_parser;
 use self::swc_ecma_parser::JscTarget;
 use crate::js::data::js_types;
 use crate::js::data::js_types::JsNext;
+use std::io::Write;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
-use swc_common::errors::{DiagnosticBuilder, Emitter};
+use std::sync::Mutex;
+use swc_common::errors::{DiagnosticBuilder, Emitter, EmitterWriter};
 use swc_common::sync::Lrc;
 use swc_common::{
     errors::{ColorConfig, Handler},
@@ -88,9 +90,21 @@ impl JsEngine {
     }
 }
 
+struct TempFix {}
+
+impl Write for TempFix {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error> {
+        std::io::stdout().write(buf)
+    }
+
+    fn flush(&mut self) -> Result<(), std::io::Error> {
+        Ok(())
+    }
+}
+
 fn m1() {
     let cm: Lrc<SourceMap> = Default::default();
-    let handler = Handler::with_emitter(true, false, Box::new(Default::default()));
+    let handler = Handler::with_emitter(true, false, Box::new(Empty {}));
     let fm = cm.new_source_file(
         FileName::Custom("test.js".into()),
         "function foo() {}".into(),

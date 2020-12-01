@@ -16,19 +16,12 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="0441aab0-0b7e-4cd4-9459-5b452a3382c1" name="Default Changelist" comment="">
-      <change afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/rjs_engine.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/js/data/js_code.rs" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/js/data/js_execution.rs" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/js/data/js_types.rs" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/js/data/mod.rs" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/js/mod.rs" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/js/data/js_code.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/js_code.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/js/data/js_execution.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/js_execution.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/js/data/js_types.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/js_types.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -69,7 +62,7 @@
     <property name="node.js.selected.package.tslint" value="(autodetect)" />
     <property name="nodejs_package_manager_path" value="npm" />
     <property name="org.rust.cargo.project.model.PROJECT_DISCOVERY" value="true" />
-    <property name="settings.editor.selected.configurable" value="language.rust.rustfmt" />
+    <property name="settings.editor.selected.configurable" value="language.rust.cargo" />
   </component>
   <component name="RunManager">
     <configuration name="Run" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
@@ -109,7 +102,7 @@
       <workItem from="1606527354343" duration="46000" />
       <workItem from="1606726831220" duration="2225000" />
       <workItem from="1606780022874" duration="101000" />
-      <workItem from="1606780146991" duration="8038000" />
+      <workItem from="1606780146991" duration="18647000" />
     </task>
     <servers />
   </component>
@@ -117,27 +110,49 @@
     <option name="version" value="3" />
   </component>
   <component name="WindowStateProjectService">
-    <state x="773" y="240" width="374" height="556" key="#com.intellij.ide.util.MemberChooser" timestamp="1606787015118">
+    <state x="418" y="177" key="#com.intellij.execution.impl.EditConfigurationsDialog" timestamp="1606798697310">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state x="773" y="240" width="374" height="556" key="#com.intellij.ide.util.MemberChooser/0.0.1920.1040@0.0.1920.1040" timestamp="1606787015118" />
+    <state x="418" y="177" key="#com.intellij.execution.impl.EditConfigurationsDialog/0.0.1920.1040@0.0.1920.1040" timestamp="1606798697310" />
+    <state x="773" y="240" width="374" height="556" key="#com.intellij.ide.util.MemberChooser" timestamp="1606799586734">
+      <screen x="0" y="0" width="1920" height="1040" />
+    </state>
+    <state x="773" y="240" width="374" height="556" key="#com.intellij.ide.util.MemberChooser/0.0.1920.1040@0.0.1920.1040" timestamp="1606799586734" />
     <state x="773" y="241" key="#com.intellij.ide.util.MemberChooser/0.0.1920.1044@0.0.1920.1044" timestamp="1606185751338" />
     <state x="743" y="277" width="424" height="478" key="FileChooserDialogImpl" timestamp="1606784167928">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
     <state x="743" y="277" width="424" height="478" key="FileChooserDialogImpl/0.0.1920.1040@0.0.1920.1040" timestamp="1606784167928" />
-    <state x="461" y="157" key="SettingsEditor" timestamp="1606185013649">
-      <screen x="0" y="0" width="1920" height="1044" />
-    </state>
-    <state x="461" y="157" key="SettingsEditor/0.0.1920.1044@0.0.1920.1044" timestamp="1606185013649" />
-    <state x="624" y="237" width="672" height="677" key="run.anything.popup" timestamp="1606786762608">
+    <state width="1878" height="277" key="GridCell.Tab.0.bottom" timestamp="1606800761438">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state x="624" y="237" width="672" height="677" key="run.anything.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606786762608" />
-    <state x="624" y="238" key="run.anything.popup/0.0.1920.1044@0.0.1920.1044" timestamp="1606181788196" />
-    <state x="623" y="230" width="672" height="678" key="search.everywhere.popup" timestamp="1606185003194">
-      <screen x="0" y="0" width="1920" height="1044" />
+    <state width="1878" height="277" key="GridCell.Tab.0.bottom/0.0.1920.1040@0.0.1920.1040" timestamp="1606800761438" />
+    <state width="1878" height="277" key="GridCell.Tab.0.center" timestamp="1606800761438">
+      <screen x="0" y="0" width="1920" height="1040" />
     </state>
+    <state width="1878" height="277" key="GridCell.Tab.0.center/0.0.1920.1040@0.0.1920.1040" timestamp="1606800761438" />
+    <state width="1878" height="277" key="GridCell.Tab.0.left" timestamp="1606800761438">
+      <screen x="0" y="0" width="1920" height="1040" />
+    </state>
+    <state width="1878" height="277" key="GridCell.Tab.0.left/0.0.1920.1040@0.0.1920.1040" timestamp="1606800761438" />
+    <state width="1878" height="277" key="GridCell.Tab.0.right" timestamp="1606800761438">
+      <screen x="0" y="0" width="1920" height="1040" />
+    </state>
+    <state width="1878" height="277" key="GridCell.Tab.0.right/0.0.1920.1040@0.0.1920.1040" timestamp="1606800761438" />
+    <state x="461" y="156" key="SettingsEditor" timestamp="1606793138886">
+      <screen x="0" y="0" width="1920" height="1040" />
+    </state>
+    <state x="461" y="156" key="SettingsEditor/0.0.1920.1040@0.0.1920.1040" timestamp="1606793138886" />
+    <state x="461" y="157" key="SettingsEditor/0.0.1920.1044@0.0.1920.1044" timestamp="1606185013649" />
+    <state x="624" y="237" width="672" height="677" key="run.anything.popup" timestamp="1606788347778">
+      <screen x="0" y="0" width="1920" height="1040" />
+    </state>
+    <state x="624" y="237" width="672" height="677" key="run.anything.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606788347778" />
+    <state x="624" y="238" key="run.anything.popup/0.0.1920.1044@0.0.1920.1044" timestamp="1606181788196" />
+    <state x="623" y="229" width="672" height="676" key="search.everywhere.popup" timestamp="1606793134026">
+      <screen x="0" y="0" width="1920" height="1040" />
+    </state>
+    <state x="623" y="229" width="672" height="676" key="search.everywhere.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606793134026" />
     <state x="623" y="230" width="672" height="678" key="search.everywhere.popup/0.0.1920.1044@0.0.1920.1044" timestamp="1606185003194" />
   </component>
 </project>

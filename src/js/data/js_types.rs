@@ -71,4 +71,27 @@ pub enum JsValue {
     },
 }
 
-impl Finalize for JsValue {}
+impl JsValue {
+    pub fn to_system_string(&self) -> Rc<String> {
+        match self {
+            JsValue::Undefined => "undefined".into(),
+            JsValue::Null => "null".into(),
+            JsValue::Number(n) => n.to_string(),
+            JsValue::Boolean(b) => b.to_string(),
+            JsValue::String(s) => s.to_string(),
+            JsValue::Object { .. } => "[object Object]".into(),
+        }
+        .into()
+    }
+
+    pub fn truthy(&self) -> bool {
+        return match self {
+            JsValue::Undefined => false,
+            JsValue::Null => false,
+            JsValue::Number(n) => *n == 0.0 || n.is_nan(),
+            JsValue::Boolean(b) => *b,
+            JsValue::String(s) => !s.is_empty(),
+            JsValue::Object { .. } => true,
+        };
+    }
+}
