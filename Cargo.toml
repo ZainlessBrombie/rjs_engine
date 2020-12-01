@@ -1,0 +1,13 @@
+[package]
+name = "rjs_engine"
+version = "0.1.0"
+authors = ["BuildTools <unconfigured@null.spigotmc.org>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+swc_ecma_ast = "0.35.0"
+swc_ecma_parser = "0.43.1"
+swc_common = "0.10.5"
+gc = {path="../rust-gc/gc", features = ["derive"]}
