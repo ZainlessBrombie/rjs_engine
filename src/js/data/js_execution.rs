@@ -172,6 +172,9 @@ impl AsyncStack {
                                             value: Gc::new(GcCell::new(JsValue::Object {
                                                 is_array: false,
                                                 content: Default::default(),
+                                                symbol_keys: Gc::new(GcCell::new(
+                                                    Default::default(),
+                                                )),
                                                 call: GcCell::new(JSCallable::Native {
                                                     creator: Gc::new(JsFn {
                                                         builder: Box::new(|ret_val, args| {
@@ -196,6 +199,7 @@ impl AsyncStack {
                                                         tracer: Box::new(()),
                                                     }),
                                                 }),
+                                                symbol: None,
                                             })),
                                         },
                                     );
@@ -207,7 +211,11 @@ impl AsyncStack {
                                                     value: JsValue::Object {
                                                         is_array: false,
                                                         content: Gc::new(GcCell::new(console_map)),
+                                                        symbol_keys: Gc::new(GcCell::new(
+                                                            Default::default(),
+                                                        )),
                                                         call: GcCell::new(JSCallable::NotCallable),
+                                                        symbol: None,
                                                     },
                                                 })),
                                             }),
@@ -271,6 +279,7 @@ pub fn build_demo_fn() -> JsValue {
     return JsValue::Object {
         is_array: false,
         content: Gc::new(GcCell::new(Default::default())),
+        symbol_keys: Gc::new(GcCell::new(HashMap::new())),
         call: GcCell::new(JSCallable::Js {
             content: Rc::new("a = 'Hello Wonderful World!'; console.log(a)".to_string()),
             creator: Gc::new(JsFn {
@@ -315,6 +324,7 @@ pub fn build_demo_fn() -> JsValue {
                 tracer: Box::new(0),
             }),
         }),
+        symbol: None,
     };
 }
 
@@ -856,8 +866,8 @@ impl FnOp {
                         let new_condition = Box::new(next.pop().unwrap());
                         next.push(GcDestr::new(FnOp::IfElse {
                             condition: new_condition,
-                            if_block: take(if_block),
-                            else_block: take(else_block),
+                            if_block: Box::from(if_block.destroy_move()),
+                            else_block: Box::from(else_block.destroy_move()),
                         }));
                         FnOpResult::Dissolve { next, cost }
                     }
@@ -865,13 +875,13 @@ impl FnOp {
                     FnOpResult::Return { .. } => condition_result,
                     FnOpResult::Value { cost, what } => {
                         if what.truthy() {
-                            FnOpResult::Dissolve {
-                                next: take(if_block),
+                            FnOpResult::Ongoing {
+                                next: if_block.destroy_move(),
                                 cost,
                             }
                         } else {
-                            FnOpResult::Dissolve {
-                                next: take(else_block),
+                            FnOpResult::Ongoing {
+                                next: else_block.destroy_move(),
                                 cost,
                             }
                         }
@@ -880,23 +890,23 @@ impl FnOp {
                         cost,
                         next: GcDestr::new(FnOp::IfElse {
                             condition: Box::from(next),
-                            if_block: take(if_block),
-                            else_block: take(else_block),
+                            if_block: Box::from(if_block.destroy_move()),
+                            else_block: Box::from(else_block.destroy_move()),
                         }),
                     },
                     FnOpResult::Call { .. } => FnOp::forward_call(condition_result, |op| {
                         GcDestr::new(FnOp::IfElse {
                             condition: Box::new(op),
-                            if_block: take(if_block),
-                            else_block: take(else_block),
+                            if_block: Box::from(if_block.destroy_move()),
+                            else_block: Box::from(else_block.destroy_move()),
                         })
                     }),
                     FnOpResult::LoadGlobal { .. } => {
                         FnOp::forward_load_global(condition_result, |op| {
                             GcDestr::new(FnOp::IfElse {
                                 condition: Box::from(op),
-                                if_block: take(if_block),
-                                else_block: take(else_block),
+                                if_block: Box::from(if_block.destroy_move()),
+                                else_block: Box::from(else_block.destroy_move()),
                             })
                         })
                     }
@@ -908,14 +918,14 @@ impl FnOp {
                     condition: Box::from(condition.destroy_move()),
                     block: block.clone(),
                 });
-                let mut block = take(block);
-                block.push(next_loop);
                 FnOpResult::Ongoing {
                     cost: 1,
                     next: GcDestr::new(FnOp::IfElse {
                         condition: Box::from(condition.destroy_move()),
-                        if_block: block,
-                        else_block: vec![],
+                        if_block: Box::new(GcDestr::new(FnOp::Multi {
+                            block: vec![block.destroy_move(), next_loop],
+                        })),
+                        else_block: Box::new(GcDestr::new(FnOp::Nop {})),
                     }),
                 }
             }
@@ -929,10 +939,9 @@ impl FnOp {
                     initial.destroy_move(),
                     GcDestr::new(FnOp::While {
                         condition: Box::from(condition.destroy_move()),
-                        block: vec![
-                            each.destroy_move(),
-                            GcDestr::new(FnOp::Multi { block: take(block) }),
-                        ],
+                        block: Box::from(GcDestr::new(FnOp::Multi {
+                            block: vec![each.destroy_move(), block.destroy_move()],
+                        })),
                     }),
                 ],
                 cost: 0,

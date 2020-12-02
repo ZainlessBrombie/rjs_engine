@@ -4,18 +4,20 @@ use crate::js::data::gc_util::GcDestr;
 use crate::js::data::js_execution::{build_demo_fn, EngineState, FnOp, JsVar};
 use crate::js::data::js_types;
 use crate::js::data::js_types::{JsNext, JsValue};
+use std::any::Any;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::Write;
+use std::marker::PhantomData;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use swc_common::errors::{DiagnosticBuilder, Emitter};
 use swc_common::sync::Lrc;
 use swc_common::{errors::Handler, FileName, SourceMap};
-use swc_ecma_ast::{Expr, Module, ModuleItem, Stmt, VarDeclOrExpr, VarDecl, Pat};
+use swc_ecma_ast::{Expr, Module, ModuleItem, Pat, Stmt, VarDecl, VarDeclOrExpr};
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax};
-use std::collections::HashMap;
-use std::rt::panic_count::get;
-use std::cell::RefCell;
 
 struct Empty {}
 
@@ -42,26 +44,34 @@ struct JsEngineInternal {
 
 struct ScopeLookup {
     cur: HashMap<Rc<String>, JsVar>,
-    prev: Option<Rc<RefCell<ScopeLookup>>>
+    prev: Option<Rc<RefCell<ScopeLookup>>>,
 }
 
 impl ScopeLookup {
     fn new(prev: Option<&Rc<RefCell<ScopeLookup>>>) -> Rc<RefCell<ScopeLookup>> {
         Rc::new(RefCell::new(ScopeLookup {
             cur: Default::default(),
-            prev: prev.map_or(None, |r| Some(r.clone()))
+            prev: prev.map_or(None, |r| Some(r.clone())),
         }))
     }
 
     fn get(&self, name: &Rc<String>) -> Option<JsVar> {
-        return self.cur.get(name).map(|r| r.clone()).or_else(|| self.prev
-            .map_or(None, |mut p| RefCell::borrow_mut(&p).get(&name))).map(|r| r.clone());
+        return self
+            .cur
+            .get(name)
+            .map(|r| r.clone())
+            .or_else(|| {
+                self.prev
+                    .as_ref()
+                    .map_or(None, |mut p| RefCell::borrow_mut(&p).get(&name))
+            })
+            .map(|r| r.clone());
     }
 
     fn insert_here(&mut self, name: Rc<String>) -> Option<JsVar> {
-        return self.get(&name).or_else(|| {
-            self.cur.insert(name.clone(), JsVar::new(name))
-        });
+        return self
+            .get(&name)
+            .or_else(|| self.cur.insert(name.clone(), JsVar::new(name)));
     }
 
     fn insert_top(&mut self, name: Rc<String>) -> JsVar {
@@ -87,8 +97,6 @@ impl JsEngine {
 
     /// Returns a JsValue that represents a function. when it is called, the module is executed and returned by the function.
     pub fn ingest_code(&self, mut module: Module) -> impl Fn() -> JsValue {
-        let mut next = js_types::next_done();
-
         module
             .body
             .drain(..)
@@ -99,26 +107,30 @@ impl JsEngine {
                 }
                 ModuleItem::Stmt(stmt) => {
                     return unimplemented!();
-                    return self.ingest_statement(next, stmt);
+                    //return self.ingest_statement(&stmt, ScopeLookup::new(None));
                 }
             })
-            .collect();
+            .collect::<Vec<GcDestr<_>>>();
         for mod_item in module.body.iter() {}
-        unimplemented!()
+        || unimplemented!()
     }
 
-    fn ingest_statement(&self, stmt: &Stmt, scopes: Rc<RefCell<ScopeLookup>>) -> impl Fn() -> GcDestr<FnOp> {
-        return || {
-            match stmt {
-                Stmt::Block(mut block) => {
+    fn ingest_statement<'a>(
+        &'a self,
+        scopes: Rc<RefCell<ScopeLookup>>,
+    ) -> Box<impl Fn(&'a Stmt) -> GcDestr<FnOp>> {
+        return Box::new(move |stmt: &'a Stmt| {
+            let this = self;
+            match &stmt {
+                Stmt::Block(block) => {
                     let block_scope = ScopeLookup::new(Some(&scopes));
                     return GcDestr::new(FnOp::Multi {
                         block: block
                             .stmts
                             .iter()
-                            .map(|stm| self.ingest_statement(stm, block_scope.clone())())
+                            .map(|stm| this.ingest_statement(block_scope.clone())(stm))
                             .collect(),
-                    })
+                    });
                 }
                 Stmt::Empty(stmt) => return GcDestr::new(FnOp::Nop {}),
                 Stmt::Debugger(stmt) => {
@@ -132,7 +144,7 @@ impl JsEngine {
                 Stmt::Return(ret_stmt) => {
                     if let Some(ret_stmt) = &ret_stmt.arg {
                         return GcDestr::new(FnOp::Return {
-                            what: Box::new(self.ingest_expression(ret_stmt, scopes)),
+                            what: Box::new(this.ingest_expression(scopes.clone())(ret_stmt)),
                         });
                     } else {
                         return GcDestr::new(FnOp::Return {
@@ -156,12 +168,12 @@ impl JsEngine {
                 }
                 Stmt::If(if_stmt) => {
                     return GcDestr::new(FnOp::IfElse {
-                        condition: Box::new(self.ingest_expression(&if_stmt.test, scopes.clone())()),
-                        if_block: Box::new(self.ingest_statement(&if_stmt.cons, scopes.clone())()),
+                        condition: Box::new(this.ingest_expression(scopes.clone())(&if_stmt.test)),
+                        if_block: Box::new(this.ingest_statement(scopes.clone())(&if_stmt.cons)),
                         else_block: Box::new(
-                            if_stmt
-                                .alt
-                                .map(|stmt| self.ingest_statement(&stmt, scopes)())
+                            (&if_stmt.alt)
+                                .as_ref()
+                                .map(|stmt| this.ingest_statement(scopes.clone())(&stmt))
                                 .unwrap_or(GcDestr::new(FnOp::Nop {})),
                         ),
                     })
@@ -172,7 +184,7 @@ impl JsEngine {
                 }
                 Stmt::Throw(throw_stmt) => {
                     return GcDestr::new(FnOp::Throw {
-                        what: Box::new(self.ingest_expression(&throw_stmt.arg, scopes)()),
+                        what: Box::new(this.ingest_expression(scopes.clone())(&throw_stmt.arg)),
                     })
                 }
                 Stmt::Try(_) => {
@@ -181,8 +193,10 @@ impl JsEngine {
                 }
                 Stmt::While(while_stmt) => {
                     return GcDestr::new(FnOp::While {
-                        condition: Box::new(self.ingest_expression(&while_stmt.test, scopes.clone())()),
-                        block: Box::new(self.ingest_statement(&while_stmt.body, scopes)()),
+                        condition: Box::new(this.ingest_expression(scopes.clone())(
+                            &while_stmt.test,
+                        )),
+                        block: Box::new(this.ingest_statement(scopes.clone())(&while_stmt.body)),
                     })
                 }
                 Stmt::DoWhile(_) => {
@@ -191,38 +205,56 @@ impl JsEngine {
                 }
                 Stmt::For(for_stmt) => {
                     return GcDestr::new(FnOp::For {
-                        initial: Box::new(for_stmt.init.map(|var_or_expr| {
+                        initial: /*Box::new(for_stmt.init.map(|var_or_expr| {
                             match var_or_expr {
                                 VarDeclOrExpr::VarDecl(var_decl) => {}
                                 VarDeclOrExpr::Expr(_) => {}
                             }
-                        }).map_or(GcDestr::new(FnOp::Nop {}))
-                            .),
-                        condition: Box::new(()),
-                        each: Box::new(()),
-                        block: Box::new(self.ingest_statement(*for_stmt.body))
-                    })
+                        }),*/ unimplemented!(),
+                        condition: Box::new(unimplemented!()),
+                        each: Box::new(unimplemented!()),
+                        block: Box::new(this.ingest_statement(scopes.clone())(&for_stmt.body))
+                    });
                 }
                 Stmt::ForIn(_) => {}
                 Stmt::ForOf(_) => {}
                 Stmt::Decl(_) => {}
                 Stmt::Expr(_) => {}
             }
-        }
+            return unimplemented!();
+        });
     }
 
-    fn ingest_var_decl(&self, decl: &VarDecl, scopes: Rc<RefCell<ScopeLookup>>) -> impl Fn() -> GcDestr<FnOp> {
-        return || {
-            return GcDestr::new(FnOp::Multi { block: decl.decls.iter().map(|decl_single| {
-                let init = ScopeLookup::insert_here(scopes.borrow_mut(), Rc::new(decl_single.name))
-            }).collect()});
-        };
+    fn ingest_var_decl(
+        &self,
+        scopes: Rc<RefCell<ScopeLookup>>,
+    ) -> Box<impl Fn(&VarDecl) -> GcDestr<FnOp>> {
+        return Box::new(move |decl: &VarDecl| {
+            return GcDestr::new(FnOp::Multi {
+                block: decl
+                    .decls
+                    .iter()
+                    .map(|decl_single| {
+                        let init = ScopeLookup::insert_here(
+                            &mut RefCell::borrow_mut(&scopes),
+                            Rc::new(unimplemented!()),
+                        );
+                        return unimplemented!();
+                    })
+                    .collect(),
+            });
+        });
     }
 
-    fn ingest_assignment(&self, pat: &Pat, scopes: Rc<RefCell<ScopeLookup>>) -> impl Fn() -> GcDestr<FnOp> {
-        return || {
+    fn ingest_assignment<'a>(
+        &self,
+        scopes: Rc<RefCell<ScopeLookup>>,
+    ) -> Box<impl Fn(&Pat) -> GcDestr<FnOp>> {
+        return Box::new(|pat: &Pat| {
             match pat {
-                Pat::Ident(_) => {}
+                Pat::Ident(ident) => {
+                    println!("{}", ident.sym.to_string())
+                }
                 Pat::Array(_) => {}
                 Pat::Rest(_) => {}
                 Pat::Object(_) => {}
@@ -230,49 +262,58 @@ impl JsEngine {
                 Pat::Invalid(_) => {}
                 Pat::Expr(_) => {}
             }
-        };
+            unimplemented!()
+        });
     }
 
-    fn ingest_expression(&self, expr: &Expr, scopes: Rc<RefCell<ScopeLookup>>) ->impl Fn() -> GcDestr<FnOp>  {
-        match expr {
-            Expr::This(_) => {}
-            Expr::Array(_) => {}
-            Expr::Object(_) => {}
-            Expr::Fn(_) => {}
-            Expr::Unary(_) => {}
-            Expr::Update(_) => {}
-            Expr::Bin(_) => {}
-            Expr::Assign(_) => {}
-            Expr::Member(_) => {}
-            Expr::Cond(_) => {}
-            Expr::Call(_) => {}
-            Expr::New(_) => {}
-            Expr::Seq(_) => {}
-            Expr::Ident(_) => {}
-            Expr::Lit(_) => {}
-            Expr::Tpl(_) => {}
-            Expr::TaggedTpl(_) => {}
-            Expr::Arrow(arrow_expr) => {}
-            Expr::Class(_) => {}
-            Expr::Yield(_) => {}
-            Expr::MetaProp(_) => {}
-            Expr::Await(_) => {}
-            Expr::Paren(_) => {}
-            Expr::JSXMember(_) => {}
-            Expr::JSXNamespacedName(_) => {}
-            Expr::JSXEmpty(_) => {}
-            Expr::JSXElement(_) => {}
-            Expr::JSXFragment(_) => {}
-            Expr::TsTypeAssertion(_) => {}
-            Expr::TsConstAssertion(_) => {}
-            Expr::TsNonNull(_) => {}
-            Expr::TsTypeCast(_) => {}
-            Expr::TsAs(_) => {}
-            Expr::PrivateName(_) => {}
-            Expr::OptChain(_) => {}
-            Expr::Invalid(_) => {}
-        }
-        unimplemented!()
+    fn ingest_expression(
+        &self,
+        scopes: Rc<RefCell<ScopeLookup>>,
+    ) -> Box<impl Fn(&Expr) -> GcDestr<FnOp>> {
+        return Box::new(|expr: &Expr| {
+            match &expr {
+                Expr::This(_) => {
+                    println!("This is not supported yet");
+                    return GcDestr::new(FnOp::Nop {});
+                }
+                Expr::Array(arr_lit) => {}
+                Expr::Object(_) => {}
+                Expr::Fn(_) => {}
+                Expr::Unary(_) => {}
+                Expr::Update(_) => {}
+                Expr::Bin(_) => {}
+                Expr::Assign(_) => {}
+                Expr::Member(_) => {}
+                Expr::Cond(_) => {}
+                Expr::Call(_) => {}
+                Expr::New(_) => {}
+                Expr::Seq(_) => {}
+                Expr::Ident(_) => {}
+                Expr::Lit(_) => {}
+                Expr::Tpl(_) => {}
+                Expr::TaggedTpl(_) => {}
+                Expr::Arrow(arrow_expr) => {}
+                Expr::Class(_) => {}
+                Expr::Yield(_) => {}
+                Expr::MetaProp(_) => {}
+                Expr::Await(_) => {}
+                Expr::Paren(_) => {}
+                Expr::JSXMember(_) => {}
+                Expr::JSXNamespacedName(_) => {}
+                Expr::JSXEmpty(_) => {}
+                Expr::JSXElement(_) => {}
+                Expr::JSXFragment(_) => {}
+                Expr::TsTypeAssertion(_) => {}
+                Expr::TsConstAssertion(_) => {}
+                Expr::TsNonNull(_) => {}
+                Expr::TsTypeCast(_) => {}
+                Expr::TsAs(_) => {}
+                Expr::PrivateName(_) => {}
+                Expr::OptChain(_) => {}
+                Expr::Invalid(_) => {}
+            }
+            unimplemented!()
+        });
     }
 }
 

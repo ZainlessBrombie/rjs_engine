@@ -11,6 +11,9 @@
 use crate::js::data::js_execution::{JsVar, StackFrame};
 use gc::{Finalize, Gc, GcCell, Trace};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 use std::rc::Rc;
 
 #[derive(Trace, Finalize)]
@@ -90,6 +93,9 @@ pub enum JSCallable {
 }
 
 #[derive(Trace, Finalize, Clone)]
+pub struct Symbol(Rc<u64>); // Note: Name ist stored in object
+
+#[derive(Trace, Finalize, Clone)]
 pub enum JsValue {
     Undefined,
     Null,
@@ -99,9 +105,28 @@ pub enum JsValue {
     Object {
         is_array: bool,
         content: Gc<GcCell<HashMap<Rc<String>, JsProperty>>>,
+        symbol_keys: Gc<GcCell<HashMap<Symbol, JsProperty>>>,
         call: GcCell<JSCallable>,
+        symbol: Option<Symbol>,
     },
 }
+
+impl Hash for Symbol {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(*Rc::deref(&self.0))
+    }
+}
+
+impl PartialEq for Symbol {
+    fn eq(&self, other: &Self) -> bool {
+        let us_loc: &u64 = Rc::deref(&self.0);
+        let other_loc: &u64 = Rc::as_ref(&other.0);
+
+        return (us_loc as *const u64) == (other_loc as *const u64);
+    }
+}
+
+impl Eq for Symbol {}
 
 impl Default for JsValue {
     fn default() -> Self {

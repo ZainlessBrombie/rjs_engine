@@ -411,6 +411,7 @@ name = "rjs_engine"
 version = "0.1.0"
 dependencies = [
  "gc",
+ "swc_atoms",
  "swc_common",
  "swc_ecma_ast",
  "swc_ecma_parser",
