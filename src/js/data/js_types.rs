@@ -130,7 +130,7 @@ impl JsValue {
         return match self {
             JsValue::Undefined => false,
             JsValue::Null => false,
-            JsValue::Number(n) => *n == 0.0 || n.is_nan(),
+            JsValue::Number(n) => *n != 0.0 && !n.is_nan(),
             JsValue::Boolean(b) => *b,
             JsValue::String(s) => !s.is_empty(),
             JsValue::Object { .. } => true,

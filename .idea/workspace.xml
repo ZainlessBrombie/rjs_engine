@@ -16,11 +16,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="0441aab0-0b7e-4cd4-9459-5b452a3382c1" name="Default Changelist" comment="">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/js/data/gc_util.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/gc_util.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/js/data/js_code.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/js_code.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/js/data/js_execution.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/js_execution.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/js/data/js_types.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/js_types.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -39,6 +41,12 @@
   </component>
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="JsFlowSettings">
+    <service-enabled>true</service-enabled>
+    <exe-path />
+    <other-services-enabled>true</other-services-enabled>
+    <auto-save>true</auto-save>
   </component>
   <component name="MacroExpansionManager">
     <option name="directoryName" value="jbng1v03" />
@@ -61,14 +69,9 @@
     <property name="node.js.selected.package.tslint" value="(autodetect)" />
     <property name="nodejs_package_manager_path" value="npm" />
     <property name="org.rust.cargo.project.model.PROJECT_DISCOVERY" value="true" />
-    <property name="settings.editor.selected.configurable" value="language.rust.cargo" />
+    <property name="settings.editor.selected.configurable" value="configurable.group.language" />
   </component>
   <component name="RunManager">
-    <configuration default="true" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" PASS_PARENT_ENVS_2="true">
-      <method v="2">
-        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
-      </method>
-    </configuration>
     <configuration name="Run" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
       <option name="channel" value="DEFAULT" />
       <option name="command" value="run --package rjs_engine --bin rjs_engine" />
@@ -79,6 +82,11 @@
       <envs />
       <method v="2">
         <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <configuration default="true" type="GradleAppRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" PASS_PARENT_ENVS_2="true">
+      <method v="2">
+        <option name="com.jetbrains.cidr.cpp.gradle.execution.GradleNativeBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
     </configuration>
   </component>
@@ -123,50 +131,67 @@
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
     <state x="743" y="277" width="424" height="478" key="FileChooserDialogImpl/0.0.1920.1040@0.0.1920.1040" timestamp="1606784167928" />
-    <state width="1874" height="275" key="GridCell.Tab.0.bottom" timestamp="1606866658669">
-      <screen x="0" y="0" width="1920" height="1044" />
+    <state width="1878" height="277" key="GridCell.Tab.0.bottom" timestamp="1606916870547">
+      <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state width="1878" height="277" key="GridCell.Tab.0.bottom/0.0.1920.1040@0.0.1920.1040" timestamp="1606857699834" />
+    <state width="1878" height="277" key="GridCell.Tab.0.bottom/0.0.1920.1040@0.0.1920.1040" timestamp="1606916870547" />
     <state width="1874" height="275" key="GridCell.Tab.0.bottom/0.0.1920.1044@0.0.1920.1044" timestamp="1606866658669" />
     <state width="1878" height="277" key="GridCell.Tab.0.bottom/0.0.2181.2120@0.0.2181.2120" timestamp="1606825251283" />
-    <state width="1874" height="275" key="GridCell.Tab.0.center" timestamp="1606866658667">
-      <screen x="0" y="0" width="1920" height="1044" />
+    <state width="1878" height="277" key="GridCell.Tab.0.center" timestamp="1606916870547">
+      <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state width="1878" height="277" key="GridCell.Tab.0.center/0.0.1920.1040@0.0.1920.1040" timestamp="1606857699834" />
+    <state width="1878" height="277" key="GridCell.Tab.0.center/0.0.1920.1040@0.0.1920.1040" timestamp="1606916870547" />
     <state width="1874" height="275" key="GridCell.Tab.0.center/0.0.1920.1044@0.0.1920.1044" timestamp="1606866658667" />
     <state width="1878" height="277" key="GridCell.Tab.0.center/0.0.2181.2120@0.0.2181.2120" timestamp="1606825251282" />
-    <state width="1874" height="275" key="GridCell.Tab.0.left" timestamp="1606866658666">
-      <screen x="0" y="0" width="1920" height="1044" />
+    <state width="1878" height="277" key="GridCell.Tab.0.left" timestamp="1606916870547">
+      <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state width="1878" height="277" key="GridCell.Tab.0.left/0.0.1920.1040@0.0.1920.1040" timestamp="1606857699833" />
+    <state width="1878" height="277" key="GridCell.Tab.0.left/0.0.1920.1040@0.0.1920.1040" timestamp="1606916870547" />
     <state width="1874" height="275" key="GridCell.Tab.0.left/0.0.1920.1044@0.0.1920.1044" timestamp="1606866658666" />
     <state width="1878" height="277" key="GridCell.Tab.0.left/0.0.2181.2120@0.0.2181.2120" timestamp="1606825251282" />
-    <state width="1874" height="275" key="GridCell.Tab.0.right" timestamp="1606866658668">
-      <screen x="0" y="0" width="1920" height="1044" />
+    <state width="1878" height="277" key="GridCell.Tab.0.right" timestamp="1606916870547">
+      <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state width="1878" height="277" key="GridCell.Tab.0.right/0.0.1920.1040@0.0.1920.1040" timestamp="1606857699834" />
+    <state width="1878" height="277" key="GridCell.Tab.0.right/0.0.1920.1040@0.0.1920.1040" timestamp="1606916870547" />
     <state width="1874" height="275" key="GridCell.Tab.0.right/0.0.1920.1044@0.0.1920.1044" timestamp="1606866658668" />
     <state width="1878" height="277" key="GridCell.Tab.0.right/0.0.2181.2120@0.0.2181.2120" timestamp="1606825251283" />
+    <state width="1878" height="342" key="GridCell.Tab.1.bottom" timestamp="1606916623226">
+      <screen x="0" y="0" width="1920" height="1040" />
+    </state>
+    <state width="1878" height="342" key="GridCell.Tab.1.bottom/0.0.1920.1040@0.0.1920.1040" timestamp="1606916623226" />
+    <state width="1878" height="342" key="GridCell.Tab.1.center" timestamp="1606916623226">
+      <screen x="0" y="0" width="1920" height="1040" />
+    </state>
+    <state width="1878" height="342" key="GridCell.Tab.1.center/0.0.1920.1040@0.0.1920.1040" timestamp="1606916623226" />
+    <state width="1878" height="342" key="GridCell.Tab.1.left" timestamp="1606916623225">
+      <screen x="0" y="0" width="1920" height="1040" />
+    </state>
+    <state width="1878" height="342" key="GridCell.Tab.1.left/0.0.1920.1040@0.0.1920.1040" timestamp="1606916623225" />
+    <state width="1878" height="342" key="GridCell.Tab.1.right" timestamp="1606916623226">
+      <screen x="0" y="0" width="1920" height="1040" />
+    </state>
+    <state width="1878" height="342" key="GridCell.Tab.1.right/0.0.1920.1040@0.0.1920.1040" timestamp="1606916623226" />
     <state x="773" y="225" width="364" height="582" key="RollbackChangesDialog" timestamp="1606816957430">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
     <state x="773" y="225" width="364" height="582" key="RollbackChangesDialog/0.0.1920.1040@0.0.1920.1040" timestamp="1606816957430" />
-    <state x="461" y="156" key="SettingsEditor" timestamp="1606793138886">
+    <state x="461" y="156" key="SettingsEditor" timestamp="1606915093810">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state x="461" y="156" key="SettingsEditor/0.0.1920.1040@0.0.1920.1040" timestamp="1606793138886" />
+    <state x="461" y="156" key="SettingsEditor/0.0.1920.1040@0.0.1920.1040" timestamp="1606915093810" />
     <state x="461" y="157" key="SettingsEditor/0.0.1920.1044@0.0.1920.1044" timestamp="1606185013649" />
     <state x="768" y="436" key="com.intellij.openapi.vcs.update.UpdateOrStatusOptionsDialogupdate-v2" timestamp="1606815820342">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
     <state x="768" y="436" key="com.intellij.openapi.vcs.update.UpdateOrStatusOptionsDialogupdate-v2/0.0.1920.1040@0.0.1920.1040" timestamp="1606815820342" />
-    <state x="666" y="268" width="1042" height="502" key="find.popup" timestamp="1606822835232">
+    <state x="666" y="268" width="1042" height="532" key="find.popup" timestamp="1606916868977">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state x="666" y="268" width="1042" height="502" key="find.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606822835232" />
-    <state width="671" height="480" key="javadoc.popup.new" timestamp="1606867964218">
-      <screen x="0" y="0" width="1920" height="1044" />
+    <state x="666" y="268" width="1042" height="532" key="find.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606916868977" />
+    <state width="671" height="479" key="javadoc.popup.new" timestamp="1606924848847">
+      <screen x="0" y="0" width="1920" height="1040" />
     </state>
+    <state width="671" height="479" key="javadoc.popup.new/0.0.1920.1040@0.0.1920.1040" timestamp="1606924848847" />
     <state width="671" height="480" key="javadoc.popup.new/0.0.1920.1044@0.0.1920.1044" timestamp="1606867964218" />
     <state x="624" y="238" key="run.anything.popup" timestamp="1606863076669">
       <screen x="0" y="0" width="1920" height="1044" />
@@ -174,10 +199,76 @@
     <state x="624" y="237" width="672" height="677" key="run.anything.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606820537364" />
     <state x="624" y="238" key="run.anything.popup/0.0.1920.1044@0.0.1920.1044" timestamp="1606863076669" />
     <state x="709" y="483" width="764" height="1381" key="run.anything.popup/0.0.2181.2120@0.0.2181.2120" timestamp="1606823597709" />
-    <state x="623" y="230" width="672" height="678" key="search.everywhere.popup" timestamp="1606864686053">
-      <screen x="0" y="0" width="1920" height="1044" />
+    <state x="623" y="229" width="672" height="676" key="search.everywhere.popup" timestamp="1606915067325">
+      <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state x="623" y="229" width="672" height="676" key="search.everywhere.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606822269223" />
+    <state x="623" y="229" width="672" height="676" key="search.everywhere.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606915067325" />
     <state x="623" y="230" width="672" height="678" key="search.everywhere.popup/0.0.1920.1044@0.0.1920.1044" timestamp="1606864686053" />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/js/data/js_execution.rs</url>
+          <line>254</line>
+          <option name="timeStamp" value="3" />
+        </line-breakpoint>
+        <line-breakpoint type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/js/data/js_execution.rs</url>
+          <line>655</line>
+          <option name="timeStamp" value="7" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/js/data/js_execution.rs</url>
+          <line>179</line>
+          <option name="timeStamp" value="8" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/js/data/js_execution.rs</url>
+          <line>111</line>
+          <option name="timeStamp" value="10" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/js/data/js_execution.rs</url>
+          <line>654</line>
+          <option name="timeStamp" value="11" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/js/data/js_execution.rs</url>
+          <line>542</line>
+          <option name="timeStamp" value="13" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/js/data/js_execution.rs</url>
+          <line>530</line>
+          <option name="timeStamp" value="14" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/js/data/js_execution.rs</url>
+          <line>816</line>
+          <option name="timeStamp" value="15" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/js/data/js_execution.rs</url>
+          <line>547</line>
+          <option name="timeStamp" value="16" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/js/data/js_execution.rs</url>
+          <line>720</line>
+          <option name="timeStamp" value="18" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/js/data/js_execution.rs</url>
+          <line>698</line>
+          <option name="timeStamp" value="19" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
+          <url>file://$PROJECT_DIR$/src/js/data/js_execution.rs</url>
+          <line>675</line>
+          <option name="timeStamp" value="20" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
   </component>
 </project>

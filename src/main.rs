@@ -5,5 +5,4 @@ mod js;
 
 fn main() {
     js::data::js_code::m1();
-    println!("Hello, world!");
 }

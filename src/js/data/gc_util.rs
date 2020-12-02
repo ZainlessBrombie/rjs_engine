@@ -1,4 +1,4 @@
-use gc::{Finalize, GcCell, GcCellRefMut, Trace};
+use gc::{Finalize, Trace};
 use std::ops::{Deref, DerefMut};
 
 #[derive(Clone, Trace, Finalize)]
