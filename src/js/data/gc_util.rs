@@ -1,21 +1,49 @@
 use gc::{Finalize, GcCell, GcCellRefMut, Trace};
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 
 #[derive(Clone, Trace, Finalize)]
 pub struct GcDestr<T: 'static + Trace + Finalize> {
-    state: GcCell<DestroyState<T>>,
+    state: DestroyState<T>,
+}
+
+impl<T: Finalize + Trace> Deref for GcDestr<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        if let DestroyState::There(ref o) = self.state {
+            o
+        } else {
+            panic!("Cannot deref destroyed value")
+        }
+    }
+}
+
+impl<T: Trace + Finalize> DerefMut for GcDestr<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        if let DestroyState::There(ref mut o) = self.state {
+            o
+        } else {
+            panic!("Cannot deref destroyed value")
+        }
+    }
 }
 
 #[derive(Finalize, Trace, Clone)]
-enum DestroyState<T> {
+pub enum DestroyState<T> {
     There(T),
     Destroyed,
+}
+
+impl<T: Finalize + Trace> Default for DestroyState<T> {
+    fn default() -> Self {
+        DestroyState::Destroyed
+    }
 }
 
 impl<T: Finalize + Trace + 'static> From<T> for GcDestr<T> {
     fn from(o: T) -> Self {
         GcDestr {
-            state: GcCell::new(DestroyState::There(o)),
+            state: DestroyState::There(o),
         }
     }
 }
@@ -25,16 +53,9 @@ impl<T: Trace + Finalize> GcDestr<T> {
         return GcDestr::from(o);
     }
 
-    pub fn destroy(&mut self) -> T {
-        let mut prev = DestroyState::Destroyed;
-        std::mem::swap(
-            &mut prev,
-            GcCellRefMut::deref_mut(&mut self.state.borrow_mut()),
-        );
-        if let DestroyState::There(o) = prev {
-            return o;
-        } else {
-            panic!("Cannot destroy a destroyed gc value!")
+    pub fn destroy_move(&mut self) -> GcDestr<T> {
+        GcDestr {
+            state: std::mem::take(&mut self.state),
         }
     }
 }

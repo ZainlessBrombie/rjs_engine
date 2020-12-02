@@ -10,6 +10,8 @@ use swc_common::sync::Lrc;
 use swc_common::{errors::Handler, FileName, SourceMap};
 use swc_ecma_ast::{Module, ModuleItem, Stmt};
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax};
+use crate::js::data::js_execution::{build_demo_fn, EngineState};
+use std::sync::Mutex;
 
 struct Empty {}
 
@@ -99,6 +101,9 @@ impl Write for TempFix {
 }
 
 pub fn m1() {
+    let demo_fn = build_demo_fn();
+    let mut engine_state = EngineState { tick_queue: vec![], external_calls: Mutex::new(vec![]) };
+    engine_state.run_queue(1000);
     let cm: Lrc<SourceMap> = Default::default();
     let handler = Handler::with_emitter(true, false, Box::new(Empty {}));
     let fm = cm.new_source_file(

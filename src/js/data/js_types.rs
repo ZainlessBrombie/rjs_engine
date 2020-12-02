@@ -103,6 +103,12 @@ pub enum JsValue {
     },
 }
 
+impl Default for JsValue {
+    fn default() -> Self {
+        JsValue::Undefined
+    }
+}
+
 impl JsValue {
     pub fn from_string(val: &str) -> JsValue {
         return JsValue::String(Rc::new(val.into()));
