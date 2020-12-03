@@ -1,13 +1,14 @@
 use crate::js::data::gc_util::GcDestr;
 use crate::js::data::js_types::{JSCallable, JsFn, JsProperty, JsValue};
 use crate::js::data::util::{
-    u_block, u_call, u_deref, u_function, u_literal, u_read_var, u_standard_load_global, u_string,
-    u_write_var, JsObjectBuilder,
+    u_and, u_block, u_call, u_deref, u_function, u_if, u_if_else, u_literal, u_not, u_read_var,
+    u_standard_load_global, u_strict_comp, u_string, u_typeof, u_write_var, JsObjectBuilder,
 };
 use gc::{Finalize, GcCellRef, Trace};
 use gc::{Gc, GcCell};
 use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::f64::NAN;
 use std::mem::take;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
@@ -18,8 +19,6 @@ type ExtCallType = Arc<Mutex<Vec<Box<dyn FnOnce(&mut dyn FnMut(Gc<GcCell<AsyncSt
 pub struct EngineState {
     pub(crate) tick_queue: Vec<Gc<GcCell<AsyncStack>>>,
     pub(crate) external_calls: ExtCallType,
-    //channel_write: std::sync::mpsc::Sender<Box<dyn FnOnce()>>,
-    //channel_read: std::sync::mpsc::Receiver<Box<dyn FnOnce()>>,
 }
 
 #[derive(Clone)]
@@ -139,7 +138,7 @@ impl AsyncStack {
                                 last.ret_store.set(what);
                                 self.stack.rl_pop_front();
                             }
-                            FnOpResult::Value { cost, what } => {
+                            FnOpResult::Value { cost, .. } => {
                                 consumed += cost;
                             }
                             FnOpResult::Ongoing { cost, next } => {
@@ -152,10 +151,11 @@ impl AsyncStack {
                                 args,
                                 result,
                                 next,
+                                this,
                             } => {
                                 consumed += cost;
                                 last.remaining_ops.rl_push_front(next);
-                                self.stack.push(call_to_js_stack(on, result, args));
+                                self.stack.push(call_to_js_stack(on, result, args, this));
                                 break;
                             }
                             FnOpResult::LoadGlobal {
@@ -216,7 +216,12 @@ impl AsyncStack {
     }
 }
 
-fn call_to_js_stack(val: JsValue, ret_val: JsVar, mut args: Vec<JsVar>) -> StackFrame {
+fn call_to_js_stack(
+    val: JsValue,
+    ret_val: JsVar,
+    mut args: Vec<JsVar>,
+    this: JsValue,
+) -> StackFrame {
     return match &val {
         JsValue::String(s) => throw_frame(JsValue::from_string("[string] is not a function")),
         JsValue::Object(obj) => match &(&GcCell::borrow(&obj)).call {
@@ -224,10 +229,10 @@ fn call_to_js_stack(val: JsValue, ret_val: JsVar, mut args: Vec<JsVar>) -> Stack
                 throw_frame(JsValue::from_string("[object Object] is not a function"))
             }
             JSCallable::Js { creator, .. } => {
-                creator.call(ret_val, args.drain(..).map(|v| v.get()).collect())
+                creator.call(ret_val, args.drain(..).map(|v| v.get()).collect(), this)
             }
             JSCallable::Native { creator } => {
-                creator.call(ret_val, args.drain(..).map(|v| v.get()).collect())
+                creator.call(ret_val, args.drain(..).map(|v| v.get()).collect(), this)
             }
         },
         v => throw_frame(JsValue::from_string(
@@ -349,6 +354,7 @@ pub enum FnOp {
         from_store: JsVar,
         key_store: JsVar,
         done: JsVar,
+        this_override: Option<JsValue>,
     },
     IfElse {
         condition: Box<GcDestr<FnOp>>,
@@ -368,6 +374,36 @@ pub enum FnOp {
     Nop {},
     Multi {
         block: Vec<GcDestr<FnOp>>,
+    },
+    BoolAnd {
+        left: Box<GcDestr<FnOp>>,
+        right: Box<GcDestr<FnOp>>,
+    },
+    BoolNot {
+        of: Box<GcDestr<FnOp>>,
+    },
+    BoolOr {
+        left: Box<GcDestr<FnOp>>,
+        right: Box<GcDestr<FnOp>>,
+    },
+    FuzzyCompare {
+        left: Box<GcDestr<FnOp>>,
+        right: Box<GcDestr<FnOp>>,
+        l_store: JsVar,
+        r_store: JsVar,
+        done: JsVar,
+    },
+    StrictCompare {
+        left: Box<GcDestr<FnOp>>,
+        right: Box<GcDestr<FnOp>>,
+        l_store: JsVar,
+        r_store: JsVar,
+        done: JsVar,
+    },
+    TypeOf {
+        of: Box<GcDestr<FnOp>>,
+        result: JsVar,
+        done: JsVar,
     },
     Await {},
 }
@@ -390,11 +426,13 @@ impl FnOp {
                     from_store: JsVar::new(Rc::new("#from_store#".into())),
                     key_store: JsVar::new(Rc::new("#key_store#".into())),
                     done: JsVar::new(Rc::new("#done_store#".into())),
+                    this_override: None,
                 })),
                 key: Box::from(consumer(temp_var)),
                 from_store: JsVar::new(Rc::new("#from_store#".into())),
                 key_store: JsVar::new(Rc::new("#key_store#".into())),
                 done: JsVar::new(Rc::new("#done_store#".into())),
+                this_override: None,
             }),
         };
     }
@@ -410,11 +448,13 @@ impl FnOp {
                 on,
                 result,
                 next,
+                this,
             } => FnOpResult::Call {
                 cost,
                 on,
                 args,
                 result,
+                this,
                 next: then(next),
             },
             _ => {
@@ -511,11 +551,12 @@ impl FnOp {
                         }));
                         FnOpResult::Dissolve { next, cost }
                     }
-                    FnOpResult::Value { what, cost } => {
+                    FnOpResult::Value { what, cost, from } => {
                         (*target.value.try_borrow_mut().unwrap().deref_mut()) = what.clone();
                         FnOpResult::Value {
                             cost: cost + 1,
-                            what,
+                            what: what.clone(),
+                            from: what,
                         }
                     }
                     FnOpResult::Call { .. } => FnOp::forward_call(result, |op| {
@@ -538,10 +579,12 @@ impl FnOp {
             FnOp::LoadStatic { value } => FnOpResult::Value {
                 cost: 1,
                 what: value.clone(),
+                from: Default::default(),
             },
             FnOp::ReadVar { which } => FnOpResult::Value {
                 cost: 1,
                 what: Deref::deref(&GcCell::borrow(&which.value)).clone(),
+                from: Default::default(),
             },
             FnOp::CallFunction {
                 on,
@@ -560,7 +603,7 @@ impl FnOp {
                         }),
                         FnOpResult::Throw { .. } => result,
                         FnOpResult::Return { .. } => result,
-                        FnOpResult::Value { cost, what } => {
+                        FnOpResult::Value { cost, what, from } => {
                             let temp_var = JsVar::new(Rc::new("#result_holder#".into()));
                             FnOpResult::Call {
                                 cost: cost + 1,
@@ -568,6 +611,7 @@ impl FnOp {
                                 args: take(arg_vars),
                                 result: temp_var.clone(),
                                 next: GcDestr::new(FnOp::ReadVar { which: temp_var }),
+                                this: from,
                             }
                         }
                         FnOpResult::Ongoing { cost, next } => FnOpResult::Ongoing {
@@ -632,7 +676,11 @@ impl FnOp {
                     }
                     FnOpResult::Throw { .. } => result,
                     FnOpResult::Return { .. } => result,
-                    FnOpResult::Value { what, cost } => FnOpResult::Throw {
+                    FnOpResult::Value {
+                        what,
+                        cost,
+                        from: _from,
+                    } => FnOpResult::Throw {
                         cost: cost + 1,
                         what,
                     },
@@ -663,9 +711,11 @@ impl FnOp {
                 from_store,
                 key_store,
                 done,
+                this_override,
             } => {
                 if GcCellRef::deref(&GcCell::borrow(&done.value)).truthy() {
-                    match GcCellRef::deref(&GcCell::borrow(&from_store.value)) {
+                    let read_from = GcCellRef::deref(&GcCell::borrow(&from_store.value)).clone();
+                    match &read_from {
                         JsValue::Undefined => FnOpResult::Throw {
                             cost: 1,
                             what: JsValue::String(
@@ -700,6 +750,7 @@ impl FnOp {
                                     from_store: from_store.clone(),
                                     key_store: key_store.clone(),
                                     done: JsVar::new(Rc::new("#done_marker#".into())),
+                                    this_override: Option::from(read_from.clone()),
                                 })
                             }) // TODO proto loops
                         }
@@ -712,6 +763,7 @@ impl FnOp {
                                 from_store: from_store.clone(),
                                 key_store: key_store.clone(),
                                 done: JsVar::new(Rc::new("#done_marker#".into())),
+                                this_override: Option::from(read_from.clone()),
                             })
                         }),
                         JsValue::String(s) => {
@@ -721,9 +773,11 @@ impl FnOp {
                                 let letter_at = &s[(index as usize)..((index + 1) as usize)];
                                 // ^ TODO check: safe? ^
                                 {
+                                    let v = JsValue::String(Rc::new(letter_at.into()));
                                     FnOpResult::Value {
                                         cost: 1,
-                                        what: JsValue::String(Rc::new(letter_at.into())),
+                                        what: v.clone(), // TODO correct?
+                                        from: v,
                                     }
                                 }
                             } else {
@@ -738,6 +792,7 @@ impl FnOp {
                                         from_store: from_store.clone(),
                                         key_store: key_store.clone(),
                                         done: JsVar::new(Rc::new("#done_marker#".into())),
+                                        this_override: Option::from(read_from.clone()),
                                     })
                                 })
                             }
@@ -750,11 +805,37 @@ impl FnOp {
                                 FnOpResult::Value {
                                     cost: 1,
                                     what: found_value.value.clone(),
+                                    from: this_override
+                                        .clone()
+                                        .unwrap_or_else(|| read_from.clone()),
                                 }
                             } else {
-                                FnOpResult::Value {
-                                    cost: 1,
-                                    what: JsValue::Undefined,
+                                let proto_holder = JsVar::new(Rc::new("#proto_holder#".into()));
+                                FnOpResult::Ongoing {
+                                    cost: 0,
+                                    next: u_block(vec![
+                                        u_write_var(
+                                            proto_holder.clone(),
+                                            u_deref(
+                                                u_literal(read_from.clone()),
+                                                u_literal(u_string("__proto__")),
+                                            ),
+                                        ),
+                                        u_if(
+                                            u_and(
+                                                u_strict_comp(
+                                                    u_literal(u_string("object")),
+                                                    u_typeof(u_read_var(proto_holder.clone())),
+                                                ),
+                                                u_read_var(proto_holder.clone()),
+                                            ),
+                                            // TODO make this value be used
+                                            u_deref(
+                                                u_read_var(proto_holder),
+                                                u_literal(key_store.get()),
+                                            ),
+                                        ),
+                                    ]),
                                 }
                             }
                         }
@@ -786,6 +867,7 @@ impl FnOp {
                                 from_store: from_store.clone(),
                                 key_store: key_store.clone(),
                                 done: done.clone(),
+                                this_override: None,
                             }),
                         ],
                         cost: 1,
@@ -810,7 +892,11 @@ impl FnOp {
                     }
                     FnOpResult::Throw { .. } => condition_result,
                     FnOpResult::Return { .. } => condition_result,
-                    FnOpResult::Value { cost, what } => {
+                    FnOpResult::Value {
+                        cost,
+                        what,
+                        from: _from,
+                    } => {
                         if what.truthy() {
                             FnOpResult::Ongoing {
                                 next: if_block.destroy_move(),
@@ -886,6 +972,7 @@ impl FnOp {
             FnOp::Nop { .. } => FnOpResult::Value {
                 cost: 1,
                 what: JsValue::Undefined,
+                from: Default::default(),
             },
             FnOp::Multi { block } => FnOpResult::Dissolve {
                 next: take(block),
@@ -919,7 +1006,11 @@ impl FnOp {
                     }),
                     FnOpResult::Throw { .. } => ret,
                     FnOpResult::Return { .. } => ret,
-                    FnOpResult::Value { cost, what } => FnOpResult::Return {
+                    FnOpResult::Value {
+                        cost,
+                        what,
+                        from: _from,
+                    } => FnOpResult::Return {
                         cost: cost + 1,
                         what,
                     },
@@ -946,6 +1037,180 @@ impl FnOp {
                     }),
                 }
             }
+            FnOp::BoolAnd { right, left } => {
+                let l_var = JsVar::new(Rc::new("#temp#".into()));
+                let r_var = JsVar::new(Rc::new("#temp#".into()));
+                FnOpResult::Dissolve {
+                    next: vec![
+                        u_write_var(l_var.clone(), left.destroy_move()),
+                        u_if_else(
+                            u_not(u_read_var(l_var.clone())),
+                            u_write_var(r_var.clone(), u_read_var(l_var)),
+                            u_write_var(r_var.clone(), right.destroy_move()),
+                        ),
+                        u_read_var(r_var),
+                    ],
+                    cost: 1,
+                }
+            }
+            FnOp::BoolOr { right, left } => {
+                let l_var = JsVar::new(Rc::new("#temp#".into()));
+                let r_var = JsVar::new(Rc::new("#temp#".into()));
+                FnOpResult::Dissolve {
+                    next: vec![
+                        u_write_var(l_var.clone(), left.destroy_move()),
+                        u_if_else(
+                            u_read_var(l_var.clone()),
+                            u_write_var(r_var.clone(), u_read_var(l_var)),
+                            u_write_var(r_var.clone(), right.destroy_move()),
+                        ),
+                        u_read_var(r_var),
+                    ],
+                    cost: 1,
+                }
+            }
+            FnOp::BoolNot { of } => {
+                let result = JsVar::new(Rc::new("#temp#".into()));
+                result.set(JsValue::Boolean(false));
+                FnOpResult::Dissolve {
+                    next: vec![
+                        u_if(
+                            of.destroy_move(),
+                            u_write_var(result.clone(), u_literal(JsValue::Boolean(true))),
+                        ),
+                        u_read_var(result),
+                    ],
+                    cost: 1,
+                }
+            }
+            FnOp::FuzzyCompare {
+                left,
+                right,
+                l_store,
+                r_store,
+                done,
+            } => {
+                if done.get().truthy() {
+                    let ret = match &(l_store.get(), r_store.get()) {
+                        (
+                            JsValue::Undefined | JsValue::Null,
+                            JsValue::Undefined | JsValue::Null,
+                        ) => true,
+                        (JsValue::Undefined | JsValue::Null, _) => false,
+                        (_, JsValue::Undefined | JsValue::Null) => false,
+                        (JsValue::Number(n1), JsValue::Number(n2)) => n1 == n2,
+                        (JsValue::String(s), JsValue::Number(n)) => *n == s.parse().unwrap_or(NAN),
+                        (JsValue::Number(n), JsValue::String(s)) => *n == s.parse().unwrap_or(NAN),
+                        (JsValue::Number(n), JsValue::Boolean(b)) => {
+                            *n == (if *b { 1.0 } else { 0.0 })
+                        }
+                        (JsValue::Boolean(b), JsValue::Number(n)) => {
+                            *n == (if *b { 1.0 } else { 0.0 })
+                        }
+                        (JsValue::Boolean(b1), JsValue::Boolean(b2)) => b1 == b2,
+                        (JsValue::String(s1), JsValue::String(s2)) => s1 == s2,
+                        (JsValue::String(s), JsValue::Boolean(b)) => {
+                            s.as_str() == (if *b { "1" } else { "0" })
+                        }
+                        (JsValue::Object(o1), JsValue::Object(o2)) => {
+                            GcCell::borrow(&o1).identity == GcCell::borrow(&o2).identity
+                        }
+                        (_, _) => false, // TODO toprimitive
+                    };
+                    FnOpResult::Value {
+                        cost: 1,
+                        what: JsValue::Boolean(ret),
+                        from: Default::default(),
+                    }
+                } else {
+                    FnOpResult::Dissolve {
+                        next: vec![
+                            u_write_var(l_store.clone(), left.destroy_move()),
+                            u_write_var(r_store.clone(), right.destroy_move()),
+                            u_write_var(done.clone(), u_literal(JsValue::Boolean(true))),
+                            GcDestr::new(FnOp::FuzzyCompare {
+                                left: Box::new(FnOp::throw_internal("fuzzy_comp (1)")),
+                                right: Box::new(FnOp::throw_internal("fuzzy_comp (1)")),
+                                l_store: l_store.clone(),
+                                r_store: r_store.clone(),
+                                done: done.clone(),
+                            }),
+                        ],
+                        cost: 1,
+                    }
+                }
+            }
+            FnOp::StrictCompare {
+                left,
+                right,
+                l_store,
+                r_store,
+                done,
+            } => {
+                if done.get().truthy() {
+                    let ret = match &(l_store.get(), r_store.get()) {
+                        (JsValue::Undefined, JsValue::Undefined) => true,
+                        (JsValue::Null, JsValue::Null) => true,
+                        (JsValue::Number(n1), JsValue::Number(n2)) => n1 == n2,
+                        (JsValue::Boolean(b1), JsValue::Boolean(b2)) => b1 == b2,
+                        (JsValue::String(s1), JsValue::String(s2)) => s1.as_str() == s2.as_str(),
+                        (JsValue::Object(o1), JsValue::Object(o2)) => {
+                            &GcCell::borrow(&o1).identity == &GcCell::borrow(&o2).identity
+                        }
+                        (_, _) => false,
+                    };
+                    return FnOpResult::Value {
+                        cost: 1,
+                        what: JsValue::Boolean(ret),
+                        from: Default::default(),
+                    };
+                } else {
+                    return FnOpResult::Dissolve {
+                        next: vec![
+                            u_write_var(l_store.clone(), left.destroy_move()),
+                            u_write_var(r_store.clone(), right.destroy_move()),
+                            u_write_var(done.clone(), u_literal(JsValue::Boolean(true))),
+                            GcDestr::new(FnOp::StrictCompare {
+                                left: Box::from(FnOp::throw_internal("strict comp (1)")),
+                                right: Box::from(FnOp::throw_internal("strict comp (2)")),
+                                l_store: l_store.clone(),
+                                r_store: r_store.clone(),
+                                done: done.clone(),
+                            }),
+                        ],
+                        cost: 1,
+                    };
+                }
+            }
+            FnOp::TypeOf { of, result, done } => {
+                if done.get().truthy() {
+                    let to_str = match result.get() {
+                        JsValue::Undefined => "undefined",
+                        JsValue::Null => "object",
+                        JsValue::Boolean(_) => "boolean",
+                        JsValue::String(_) => "string",
+                        JsValue::Object(_) => "object",
+                        JsValue::Number(_) => "number",
+                    };
+                    FnOpResult::Value {
+                        cost: 1,
+                        what: JsValue::String(Rc::new(to_str.into())),
+                        from: Default::default(),
+                    }
+                } else {
+                    FnOpResult::Dissolve {
+                        next: vec![
+                            u_write_var(result.clone(), of.destroy_move()),
+                            GcDestr::new(FnOp::TypeOf {
+                                of: Box::new(FnOp::throw_internal("typeif (1)")),
+                                result: result.clone(),
+                                done: result.clone(),
+                            }),
+                        ],
+                        cost: 1,
+                    }
+                }
+            }
         };
     }
 }
@@ -966,6 +1231,7 @@ pub enum FnOpResult {
     Value {
         cost: u64,
         what: JsValue,
+        from: JsValue, // This context, tends to be undefined
     },
     Ongoing {
         cost: u64,
@@ -977,6 +1243,7 @@ pub enum FnOpResult {
         args: Vec<JsVar>,
         result: JsVar,
         next: GcDestr<FnOp>,
+        this: JsValue,
     },
     LoadGlobal {
         cost: u64,

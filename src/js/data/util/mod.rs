@@ -118,10 +118,68 @@ pub fn u_literal(value: JsValue) -> GcDestr<FnOp> {
     return GcDestr::new(FnOp::LoadStatic { value });
 }
 
+pub fn u_if(cond: GcDestr<FnOp>, if_b: GcDestr<FnOp>) -> GcDestr<FnOp> {
+    u_if_else(cond, if_b, GcDestr::new(FnOp::Nop {}))
+}
+
+pub fn u_and(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> {
+    return GcDestr::new(FnOp::BoolAnd {
+        left: Box::from(left),
+        right: Box::from(right),
+    });
+}
+
+pub fn u_or(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> {
+    return GcDestr::new(FnOp::BoolOr {
+        left: Box::from(left),
+        right: Box::from(right),
+    });
+}
+
+pub fn u_strict_comp(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> {
+    return GcDestr::new(FnOp::StrictCompare {
+        left: Box::new(left),
+        right: Box::new(right),
+        l_store: JsVar::new(Rc::new("#temp#".into())),
+        r_store: JsVar::new(Rc::new("#temp#".into())),
+        done: JsVar::new(Rc::new("#temp#".into())),
+    });
+}
+
+pub fn u_fuzzy_comp(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> {
+    return GcDestr::new(FnOp::FuzzyCompare {
+        left: Box::new(left),
+        right: Box::new(right),
+        l_store: JsVar::new(Rc::new("#temp#".into())),
+        r_store: JsVar::new(Rc::new("#temp#".into())),
+        done: JsVar::new(Rc::new("#temp#".into())),
+    });
+}
+
+pub fn u_typeof(of: GcDestr<FnOp>) -> GcDestr<FnOp> {
+    return GcDestr::new(FnOp::TypeOf {
+        of: Box::new(of),
+        result: JsVar::new(Rc::new("#temp#".into())),
+        done: JsVar::new(Rc::new("#temp#".into())),
+    });
+}
+
+pub fn u_if_else(cond: GcDestr<FnOp>, if_b: GcDestr<FnOp>, else_b: GcDestr<FnOp>) -> GcDestr<FnOp> {
+    return GcDestr::new(FnOp::IfElse {
+        condition: Box::from(cond),
+        if_block: Box::from(if_b),
+        else_block: Box::from(else_b),
+    });
+}
+
 pub fn u_throw(what: GcDestr<FnOp>) -> GcDestr<FnOp> {
     return GcDestr::new(FnOp::Throw {
         what: Box::from(what),
     });
+}
+
+pub fn u_not(of: GcDestr<FnOp>) -> GcDestr<FnOp> {
+    return GcDestr::new(FnOp::BoolNot { of: Box::new(of) });
 }
 
 pub fn u_while(condition: GcDestr<FnOp>, block: GcDestr<FnOp>) -> GcDestr<FnOp> {
@@ -138,6 +196,7 @@ pub fn u_deref(from: GcDestr<FnOp>, key: GcDestr<FnOp>) -> GcDestr<FnOp> {
         from_store: JsVar::new(Rc::new("#temp#".into())),
         key_store: JsVar::new(Rc::new("#temp#".into())),
         done: JsVar::new(Rc::new("#temp#".into())),
+        this_override: None,
     });
 }
 
@@ -153,7 +212,7 @@ pub fn u_function(b: GcDestr<FnOp>) -> JsValue {
     return JsObjectBuilder::new(None)
         .with_callable(JSCallable::Js {
             content: Rc::new("#manual#".to_string()),
-            creator: Gc::from(JsFn::new(b, move |f, ret, args| StackFrame {
+            creator: Gc::from(JsFn::new(b, move |f, ret, args, this| StackFrame {
                 vars: vec![],
                 remaining_ops: vec![f.destroy_move()],
                 ret_store: ret,

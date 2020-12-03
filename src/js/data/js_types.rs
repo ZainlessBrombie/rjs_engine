@@ -59,32 +59,43 @@ pub fn next_err() -> Box<dyn JsNext> {
 }
 
 pub struct JsFn {
-    builder: RefCell<Box<dyn FnMut(JsVar, Vec<JsValue>) -> StackFrame>>,
+    builder: RefCell<
+        Box<
+            dyn FnMut(
+                /* ret */ JsVar,
+                /* args */ Vec<JsValue>,
+                /* this */ JsValue,
+            ) -> StackFrame,
+        >,
+    >,
     tracer: Box<dyn Trace>,
 }
 
 impl JsFn {
-    pub fn call(&self, ret: JsVar, args: Vec<JsValue>) -> StackFrame {
-        (self.builder.borrow_mut())(ret, args)
+    pub fn call(&self, ret: JsVar, args: Vec<JsValue>, this: JsValue) -> StackFrame {
+        (self.builder.borrow_mut())(ret, args, this)
     }
 
     // todo for safety this should take an fn, not an Fn
-    pub fn new<T: Trace + 'static, F: Fn(&mut T, JsVar, Vec<JsValue>) -> StackFrame + 'static>(
+    pub fn new<
+        T: Trace + 'static,
+        F: Fn(&mut T, JsVar, Vec<JsValue>, JsValue) -> StackFrame + 'static,
+    >(
         data: T,
         f: F,
     ) -> JsFn {
         let data = Rc::new(GcCell::new(data));
         let mut data_copy = data.clone();
         JsFn {
-            builder: RefCell::new(Box::new(move |var, args| {
-                f(GcCell::borrow_mut(&data_copy).deref_mut(), var, args)
+            builder: RefCell::new(Box::new(move |var, args, this| {
+                f(GcCell::borrow_mut(&data_copy).deref_mut(), var, args, this)
             })),
             tracer: Box::new(data),
         }
     }
 
     pub fn js_value_call(f: JsValue) -> JsFn {
-        JsFn::new(f, |d, var, args| StackFrame {
+        JsFn::new(f, |d, var, args, this| StackFrame {
             vars: vec![],
             remaining_ops: vec![u_call_simple(u_literal(d.clone()))],
             ret_store: var,
@@ -98,7 +109,7 @@ impl JsFn {
         data: T,
         f: F,
     ) -> JsFn {
-        return JsFn::new(data, move |data, var, args| StackFrame {
+        return JsFn::new(data, move |data, var, args, this| StackFrame {
             vars: vec![],
             remaining_ops: vec![GcDestr::new(match f(data, args) {
                 Ok(value) => FnOp::Return {
