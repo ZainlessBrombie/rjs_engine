@@ -23,7 +23,7 @@ pub struct ConstantSymbols {
 pub struct ConstantMethods {}
 
 fn build_symbol(name: Rc<String>, strings: &ConstantStrings, sym_proto: JsValue) -> JsValue {
-    return JsObjectBuilder::new(strings)
+    return JsObjectBuilder::new(Some(strings))
         .with_proto(sym_proto)
         .with_prop(strings.description.clone(), JsValue::String(name))
         .with_being_symbol()
@@ -38,13 +38,14 @@ impl EngineConstants {
             constructor: Rc::new("constructor".to_string()),
         });
 
-        let symbol_constr = JsObjectBuilder::new(&strings)
+        let strings_clone = strings.clone();
+        let symbol_constr = JsObjectBuilder::new(Some(&strings))
             .with_callable(JSCallable::Native {
-                creator: Gc::new(JsFn::simple_call((), |_, mut args| {
-                    Ok(JsObjectBuilder::new(&strings)
+                creator: Gc::new(JsFn::simple_call((), move |_, mut args| {
+                    Ok(JsObjectBuilder::new(Some(&strings_clone))
                         .with_being_symbol()
                         .with_prop(
-                            strings.description.clone(),
+                            strings_clone.description.clone(),
                             args.drain(..).next().unwrap_or(JsValue::Undefined),
                         )
                         .build())

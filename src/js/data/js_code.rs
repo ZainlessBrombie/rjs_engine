@@ -71,7 +71,7 @@ impl ScopeLookup {
 
     fn insert_here(&mut self, name: Rc<String>) -> JsVar {
         return self.get(&name).unwrap_or_else(|| {
-            let ret = JsVar::new(name);
+            let ret = JsVar::new(name.clone());
             self.cur.insert(name.clone(), ret.clone());
             ret
         });
@@ -238,9 +238,7 @@ impl JsEngine {
                     .decls
                     .iter()
                     .map(|decl_single| {
-                        scopes
-                            .borrow_mut()
-                            .insert_here(Rc::new(ident.sym.to_string()));
+                        scopes.borrow_mut().insert_here(Rc::new(unimplemented!()));
                         let init = ScopeLookup::insert_here(
                             &mut RefCell::borrow_mut(&scopes),
                             Rc::new(unimplemented!()),
@@ -273,13 +271,14 @@ impl JsEngine {
                     });
                 }
                 Pat::Array(arr) => {
-                    let iterator = u_deref(source, u_deref(
-                        u_standard_load_global("Symbol"),
-                        u_literal(u_string("iterator")),
-                    ));
-                    for x in &arr.elems {
-                        
-                    }
+                    let iterator = u_deref(
+                        source,
+                        u_deref(
+                            u_standard_load_global("Symbol"),
+                            u_literal(u_string("iterator")),
+                        ),
+                    );
+                    for x in &arr.elems {}
                 }
                 Pat::Rest(_) => {}
                 Pat::Object(_) => {}

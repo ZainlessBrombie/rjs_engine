@@ -1,5 +1,9 @@
 use crate::js::data::gc_util::GcDestr;
 use crate::js::data::js_types::{JSCallable, JsFn, JsProperty, JsValue};
+use crate::js::data::util::{
+    u_block, u_call, u_deref, u_function, u_literal, u_read_var, u_standard_load_global, u_string,
+    u_write_var, JsObjectBuilder,
+};
 use gc::{Finalize, GcCellRef, Trace};
 use gc::{Gc, GcCell};
 use std::borrow::Borrow;
@@ -8,7 +12,6 @@ use std::mem::take;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use crate::js::data::util::JsObjectBuilder;
 
 type ExtCallType = Arc<Mutex<Vec<Box<dyn FnOnce(&mut dyn FnMut(Gc<GcCell<AsyncStack>>))>>>>;
 
@@ -163,61 +166,28 @@ impl AsyncStack {
                             } => {
                                 consumed += cost;
                                 if name.as_str() == "console" {
-                                    let mut console_map = HashMap::new();
-                                    console_map.insert(
-                                        Rc::new("log".into()),
-                                        JsProperty {
-                                            enumerable: false,
-                                            configurable: false,
-                                            writable: false,
-                                            value: Gc::new(GcCell::new(JsObjectBuilder::new(),JsValue::Object {
-                                                is_array: false,
-                                                content: Default::default(),
-                                                symbol_keys: Gc::new(GcCell::new(
-                                                    Default::default(),
-                                                )),
-                                                call: GcCell::new(JSCallable::Native {
-                                                    creator: Gc::new(JsFn {
-                                                        builder: Box::new(|ret_val, args| {
-                                                            println!(
-                                                                "{}",
-                                                                args.iter()
-                                                                    .map(|j| j
-                                                                        .to_system_string()
-                                                                        .to_string())
-                                                                    .collect::<Vec<String>>()
-                                                                    .as_slice()
-                                                                    .join(" ")
-                                                            );
-                                                            return StackFrame {
-                                                                vars: vec![],
-                                                                remaining_ops: vec![],
-                                                                ret_store: JsVar::new(Rc::new(
-                                                                    "#ignored#".into(),
-                                                                )),
-                                                            };
-                                                        }),
-                                                        tracer: Box::new(()),
-                                                    }),
-                                                }),
-                                                identity: None,
-                                            })),
-                                        },
-                                    );
                                     last.remaining_ops.rl_push_front(GcDestr::new(FnOp::Multi {
                                         block: vec![
                                             GcDestr::new(FnOp::Assign {
                                                 target: into,
                                                 what: Box::from(GcDestr::new(FnOp::LoadStatic {
-                                                    value: JsValue::Object {
-                                                        is_array: false,
-                                                        content: Gc::new(GcCell::new(console_map)),
-                                                        symbol_keys: Gc::new(GcCell::new(
-                                                            Default::default(),
-                                                        )),
-                                                        call: GcCell::new(JSCallable::NotCallable),
-                                                        identity: None,
-                                                    },
+                                                    value: JsObjectBuilder::new(None)
+                                                        .with_prop(Rc::new("log".into()), JsObjectBuilder::new(None)
+                                                            .with_callable(JSCallable::Native { creator: Gc::from(JsFn::simple_call(
+                                                                (), |_, args| {
+                                                                    println!("{}",args.iter()
+                                                                        .map(|j| j
+                                                                            .to_system_string()
+                                                                            .to_string())
+                                                                        .collect::<Vec<String>>()
+                                                                        .as_slice()
+                                                                        .join(" "));
+                                                                    Ok(JsValue::Undefined)
+                                                                },
+                                                            ))
+                                                            })
+                                                            .build())
+                                                        .build()
                                                 })),
                                             }),
                                             next,
@@ -249,15 +219,15 @@ impl AsyncStack {
 fn call_to_js_stack(val: JsValue, ret_val: JsVar, mut args: Vec<JsVar>) -> StackFrame {
     return match &val {
         JsValue::String(s) => throw_frame(JsValue::from_string("[string] is not a function")),
-        JsValue::Object { call, .. } => match GcCellRef::deref(&GcCell::borrow(&call)) {
+        JsValue::Object(obj) => match &(&GcCell::borrow(&obj)).call {
             JSCallable::NotCallable => {
                 throw_frame(JsValue::from_string("[object Object] is not a function"))
             }
             JSCallable::Js { creator, .. } => {
-                (creator.builder)(ret_val, args.drain(..).map(|v| v.get()).collect())
+                creator.call(ret_val, args.drain(..).map(|v| v.get()).collect())
             }
             JSCallable::Native { creator } => {
-                (creator.builder)(ret_val, args.drain(..).map(|v| v.get()).collect())
+                creator.call(ret_val, args.drain(..).map(|v| v.get()).collect())
             }
         },
         v => throw_frame(JsValue::from_string(
@@ -277,56 +247,22 @@ fn throw_frame(val: JsValue) -> StackFrame {
 }
 
 pub fn build_demo_fn() -> JsValue {
-    return JsValue::Object {
-        is_array: false,
-        content: Gc::new(GcCell::new(Default::default())),
-        symbol_keys: Gc::new(GcCell::new(HashMap::new())),
-        call: GcCell::new(JSCallable::Js {
-            content: Rc::new("a = 'Hello Wonderful World!'; console.log(a)".to_string()),
-            creator: Gc::new(JsFn {
-                builder: Box::new(|store, args| {
-                    let a_var = JsVar::new(Rc::new("a".into()));
-                    let arg_var = JsVar::new(Rc::new("#arg_var_1#".into()));
-                    return StackFrame {
-                        vars: vec![a_var.clone()],
-                        remaining_ops: vec![
-                            GcDestr::new(FnOp::CallFunction {
-                                on: Box::from(GcDestr::from(FnOp::Deref {
-                                    from: Box::from(GcDestr::new(FnOp::LoadGlobal {
-                                        name: Rc::new("console".to_string()),
-                                    })),
-                                    key: Box::from(GcDestr::new(FnOp::LoadStatic {
-                                        value: JsValue::String(Rc::new("log".into())),
-                                    })),
-                                    from_store: JsVar::new(Rc::new("#deref_from_store#".into())),
-                                    key_store: JsVar::new(Rc::new("#deref_key_store#".into())),
-                                    done: JsVar::new(Rc::new("#deref_is_done#".into())),
-                                })),
-                                arg_vars: vec![arg_var.clone()],
-                                arg_fillers: vec![GcDestr::new(FnOp::Assign {
-                                    target: arg_var,
-                                    what: Box::from(GcDestr::new(FnOp::ReadVar {
-                                        which: a_var.clone(),
-                                    })),
-                                })],
-                            }),
-                            GcDestr::new(FnOp::Assign {
-                                target: a_var,
-                                what: Box::from(GcDestr::new(FnOp::LoadStatic {
-                                    value: JsValue::String(Rc::new(
-                                        "Hello Wonderful World!".into(),
-                                    )),
-                                })),
-                            }),
-                        ],
-                        ret_store: store,
-                    };
-                }),
-                tracer: Box::new(0),
-            }),
-        }),
-        identity: None,
-    };
+    let a = JsVar::new(Rc::new("a".into()));
+    return JsObjectBuilder::new(None)
+        .with_callable(JSCallable::Js {
+            content: Rc::new("".to_string()),
+            creator: Gc::new(JsFn::js_value_call(u_function(u_block(vec![
+                u_write_var(a.clone(), u_literal(u_string("heyho"))),
+                u_call(
+                    u_deref(
+                        u_standard_load_global("console"),
+                        u_literal(u_string("log")),
+                    ),
+                    vec![u_read_var(a)],
+                ),
+            ])))),
+        })
+        .build();
 }
 
 // Would I ever lie to you?
@@ -806,14 +742,14 @@ impl FnOp {
                                 })
                             }
                         }
-                        JsValue::Object { content, .. } => {
-                            if let Some(found_value) = GcCell::borrow(&content).get(
+                        JsValue::Object(obj) => {
+                            if let Some(found_value) = GcCell::borrow(&obj).content.get(
                                 &GcCellRef::deref(&GcCell::borrow(&key_store.value))
                                     .to_system_string(),
                             ) {
                                 FnOpResult::Value {
                                     cost: 1,
-                                    what: (&GcCell::borrow(&found_value.value) as &JsValue).clone(),
+                                    what: found_value.value.clone(),
                                 }
                             } else {
                                 FnOpResult::Value {

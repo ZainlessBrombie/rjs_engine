@@ -10,8 +10,10 @@
 
 use crate::js::data::gc_util::GcDestr;
 use crate::js::data::js_execution::{FnOp, JsVar, StackFrame};
-use crate::js::data::util::JsObjectBuilder;
+use crate::js::data::util::{u_call, u_call_simple, u_literal, JsObjectBuilder};
 use gc::{Finalize, Gc, GcCell, Trace};
+use std::borrow::BorrowMut;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
@@ -57,20 +59,36 @@ pub fn next_err() -> Box<dyn JsNext> {
 }
 
 pub struct JsFn {
-    builder: Box<dyn Fn(JsVar, Vec<JsValue>) -> StackFrame>,
+    builder: RefCell<Box<dyn FnMut(JsVar, Vec<JsValue>) -> StackFrame>>,
     tracer: Box<dyn Trace>,
 }
 
 impl JsFn {
-    pub fn new<T: Trace + 'static, F: Fn(&T, JsVar, Vec<JsValue>) -> StackFrame + 'static>(
+    pub fn call(&self, ret: JsVar, args: Vec<JsValue>) -> StackFrame {
+        (self.builder.borrow_mut())(ret, args)
+    }
+
+    // todo for safety this should take an fn, not an Fn
+    pub fn new<T: Trace + 'static, F: Fn(&mut T, JsVar, Vec<JsValue>) -> StackFrame + 'static>(
         data: T,
         f: F,
     ) -> JsFn {
-        let data = Rc::new(data);
+        let data = Rc::new(GcCell::new(data));
+        let mut data_copy = data.clone();
         JsFn {
-            builder: Box::new(move |var, args| f(&data, var, args)),
+            builder: RefCell::new(Box::new(move |var, args| {
+                f(GcCell::borrow_mut(&data_copy).deref_mut(), var, args)
+            })),
             tracer: Box::new(data),
         }
+    }
+
+    pub fn js_value_call(f: JsValue) -> JsFn {
+        JsFn::new(f, |d, var, args| StackFrame {
+            vars: vec![],
+            remaining_ops: vec![u_call_simple(u_literal(d.clone()))],
+            ret_store: var,
+        })
     }
 
     pub fn simple_call<
@@ -80,7 +98,7 @@ impl JsFn {
         data: T,
         f: F,
     ) -> JsFn {
-        return JsFn::new(data, |data, var, args| StackFrame {
+        return JsFn::new(data, move |data, var, args| StackFrame {
             vars: vec![],
             remaining_ops: vec![GcDestr::new(match f(data, args) {
                 Ok(value) => FnOp::Return {
@@ -237,8 +255,8 @@ impl PartialEq for JsValue {
             (JsValue::Number(n1), JsValue::Number(n2)) => n1 == n2,
             (JsValue::Boolean(b1), JsValue::Boolean(b2)) => b1 == b2,
             (JsValue::String(str1), JsValue::String(str2)) => str1 == str2,
-            (JsValue::Object { identity: id1, .. }, JsValue::Object { identity: id2, .. }) => {
-                id1 == id2
+            (JsValue::Object(obj1), JsValue::Object(obj2)) => {
+                obj1.borrow().identity == obj2.borrow().identity
             }
             (_, _) => false,
         }
