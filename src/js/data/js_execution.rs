@@ -8,6 +8,7 @@ use std::mem::take;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use crate::js::data::util::JsObjectBuilder;
 
 type ExtCallType = Arc<Mutex<Vec<Box<dyn FnOnce(&mut dyn FnMut(Gc<GcCell<AsyncStack>>))>>>>;
 
@@ -169,7 +170,7 @@ impl AsyncStack {
                                             enumerable: false,
                                             configurable: false,
                                             writable: false,
-                                            value: Gc::new(GcCell::new(JsValue::Object {
+                                            value: Gc::new(GcCell::new(JsObjectBuilder::new(),JsValue::Object {
                                                 is_array: false,
                                                 content: Default::default(),
                                                 symbol_keys: Gc::new(GcCell::new(
@@ -199,7 +200,7 @@ impl AsyncStack {
                                                         tracer: Box::new(()),
                                                     }),
                                                 }),
-                                                symbol: None,
+                                                identity: None,
                                             })),
                                         },
                                     );
@@ -215,7 +216,7 @@ impl AsyncStack {
                                                             Default::default(),
                                                         )),
                                                         call: GcCell::new(JSCallable::NotCallable),
-                                                        symbol: None,
+                                                        identity: None,
                                                     },
                                                 })),
                                             }),
@@ -324,7 +325,7 @@ pub fn build_demo_fn() -> JsValue {
                 tracer: Box::new(0),
             }),
         }),
-        symbol: None,
+        identity: None,
     };
 }
 
@@ -1056,9 +1057,9 @@ pub enum FnOpResult {
 
 #[derive(Trace, Finalize)]
 pub struct StackFrame {
-    vars: Vec<JsVar>,
-    remaining_ops: Vec<GcDestr<FnOp>>, // REVERSE ORDER list of remaining ops. Using pop
-    ret_store: JsVar,
+    pub(crate) vars: Vec<JsVar>,
+    pub(crate) remaining_ops: Vec<GcDestr<FnOp>>, // REVERSE ORDER list of remaining ops. Using pop
+    pub(crate) ret_store: JsVar,
 }
 
 #[derive(Clone)]

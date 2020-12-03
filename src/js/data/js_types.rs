@@ -8,7 +8,9 @@
     fn type_of(&self) -> dyn JsValue;
 }*/
 
-use crate::js::data::js_execution::{JsVar, StackFrame};
+use crate::js::data::gc_util::GcDestr;
+use crate::js::data::js_execution::{FnOp, JsVar, StackFrame};
+use crate::js::data::util::JsObjectBuilder;
 use gc::{Finalize, Gc, GcCell, Trace};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -21,7 +23,7 @@ pub struct JsProperty {
     pub enumerable: bool,
     pub configurable: bool,
     pub writable: bool,
-    pub value: Gc<GcCell<JsValue>>,
+    pub value: JsValue,
 }
 
 pub enum ExecResult {
@@ -55,9 +57,42 @@ pub fn next_err() -> Box<dyn JsNext> {
 }
 
 pub struct JsFn {
-    // TODO :(
-    pub(crate) builder: Box<dyn Fn(JsVar, Vec<JsValue>) -> StackFrame>,
-    pub(crate) tracer: Box<dyn Trace>,
+    builder: Box<dyn Fn(JsVar, Vec<JsValue>) -> StackFrame>,
+    tracer: Box<dyn Trace>,
+}
+
+impl JsFn {
+    pub fn new<T: Trace + 'static, F: Fn(&T, JsVar, Vec<JsValue>) -> StackFrame + 'static>(
+        data: T,
+        f: F,
+    ) -> JsFn {
+        let data = Rc::new(data);
+        JsFn {
+            builder: Box::new(move |var, args| f(&data, var, args)),
+            tracer: Box::new(data),
+        }
+    }
+
+    pub fn simple_call<
+        T: Trace + 'static,
+        F: Fn(&T, Vec<JsValue>) -> Result<JsValue, JsValue> + 'static,
+    >(
+        data: T,
+        f: F,
+    ) -> JsFn {
+        return JsFn::new(data, |data, var, args| StackFrame {
+            vars: vec![],
+            remaining_ops: vec![GcDestr::new(match f(data, args) {
+                Ok(value) => FnOp::Return {
+                    what: Box::new(GcDestr::new(FnOp::LoadStatic { value })),
+                },
+                Err(err) => FnOp::Throw {
+                    what: Box::from(GcDestr::new(FnOp::LoadStatic { value: err })),
+                },
+            })],
+            ret_store: var,
+        });
+    }
 }
 
 impl Finalize for JsFn {}
@@ -93,31 +128,21 @@ pub enum JSCallable {
 }
 
 #[derive(Trace, Finalize, Clone)]
-pub struct Symbol(Rc<u64>); // Note: Name ist stored in object
+pub struct Identity(Rc<u64>); // Note: Name ist stored in object
 
-#[derive(Trace, Finalize, Clone)]
-pub enum JsValue {
-    Undefined,
-    Null,
-    Number(f64),
-    Boolean(bool),
-    String(Rc<String>),
-    Object {
-        is_array: bool,
-        content: Gc<GcCell<HashMap<Rc<String>, JsProperty>>>,
-        symbol_keys: Gc<GcCell<HashMap<Symbol, JsProperty>>>,
-        call: GcCell<JSCallable>,
-        symbol: Option<Symbol>,
-    },
+impl Identity {
+    pub fn new() -> Identity {
+        return Identity(Rc::new(rand::random()));
+    }
 }
 
-impl Hash for Symbol {
+impl Hash for Identity {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(*Rc::deref(&self.0))
     }
 }
 
-impl PartialEq for Symbol {
+impl PartialEq for Identity {
     fn eq(&self, other: &Self) -> bool {
         let us_loc: &u64 = Rc::deref(&self.0);
         let other_loc: &u64 = Rc::as_ref(&other.0);
@@ -126,7 +151,101 @@ impl PartialEq for Symbol {
     }
 }
 
-impl Eq for Symbol {}
+impl Eq for Identity {}
+
+#[derive(Trace, Finalize, Clone)]
+pub enum JsValue {
+    Undefined,
+    Null,
+    Number(f64),
+    Boolean(bool),
+    String(Rc<String>),
+    Object(Gc<GcCell<JsObj>>),
+}
+
+#[derive(Trace, Finalize)]
+pub struct InsertOrderMap<K: Hash + Eq, V> {
+    counter: u64,
+    map: HashMap<K, (u64, V)>,
+}
+
+impl<K: Hash + Eq, V> Default for InsertOrderMap<K, V> {
+    fn default() -> Self {
+        InsertOrderMap {
+            counter: 0,
+            map: Default::default(),
+        }
+    }
+}
+
+impl<K: Hash + Eq, V> InsertOrderMap<K, V> {
+    pub fn new() -> InsertOrderMap<K, V> {
+        InsertOrderMap {
+            counter: 0,
+            map: Default::default(),
+        }
+    }
+
+    pub fn insert(&mut self, k: K, v: V) {
+        self.map.insert(k, (self.counter, v));
+        self.counter = self.counter + 1;
+    }
+
+    pub fn get(&self, k: &K) -> Option<&V> {
+        self.map.get(k).map(|v| &v.1)
+    }
+
+    pub fn get_mut(&mut self, k: &K) -> Option<&mut V> {
+        self.map.get_mut(k).map(|v| &mut v.1)
+    }
+
+    pub fn get_values_ordered(&self) -> Vec<(&K, &V)> {
+        let mut ret: Vec<(u64, &K, &V)> = self.map.iter().map(|(k, v)| (v.0, k, &v.1)).collect();
+        ret.sort_by_key(|tup| tup.0);
+        return ret.iter().map(|tup| (tup.1, tup.2)).collect();
+    }
+}
+
+#[derive(Trace, Finalize)]
+pub struct JsObj {
+    pub(crate) is_array: bool,
+    pub(crate) content: InsertOrderMap<Rc<String>, JsProperty>,
+    pub(crate) symbol_keys: InsertOrderMap<JsValue, JsProperty>,
+    pub(crate) call: JSCallable,
+    pub(crate) identity: Identity,
+    pub(crate) is_symbol: bool,
+}
+
+impl Hash for JsValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            JsValue::Undefined => state.write_u8(0),
+            JsValue::Null => state.write_u8(0),
+            JsValue::Number(n) => unsafe { state.write_u64(std::mem::transmute(*n)) },
+            JsValue::Boolean(b) => b.hash(state),
+            JsValue::String(str) => str.hash(state),
+            JsValue::Object(jsobj) => jsobj.borrow().identity.hash(state),
+        }
+    }
+}
+
+impl PartialEq for JsValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (JsValue::Undefined, JsValue::Undefined) => true,
+            (JsValue::Null, JsValue::Null) => true,
+            (JsValue::Number(n1), JsValue::Number(n2)) => n1 == n2,
+            (JsValue::Boolean(b1), JsValue::Boolean(b2)) => b1 == b2,
+            (JsValue::String(str1), JsValue::String(str2)) => str1 == str2,
+            (JsValue::Object { identity: id1, .. }, JsValue::Object { identity: id2, .. }) => {
+                id1 == id2
+            }
+            (_, _) => false,
+        }
+    }
+}
+
+impl Eq for JsValue {}
 
 impl Default for JsValue {
     fn default() -> Self {

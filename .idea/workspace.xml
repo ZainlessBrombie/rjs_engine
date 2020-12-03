@@ -16,11 +16,12 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="0441aab0-0b7e-4cd4-9459-5b452a3382c1" name="Default Changelist" comment="">
-      <change afterPath="$PROJECT_DIR$/src/js/data/EngineConstants.rs" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/js/data/self_time.rs" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/js/data/stdlib/mod.rs" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/js/data/util/mod.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/js/data/EngineConstants.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/EngineConstants.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/js/data/js_code.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/js_code.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/js/data/js_execution.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/js_execution.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/js/data/js_types.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/js_types.rs" afterDir="false" />
@@ -73,7 +74,19 @@
     <property name="org.rust.cargo.project.model.PROJECT_DISCOVERY" value="true" />
     <property name="settings.editor.selected.configurable" value="reference.settingsdialog.IDE.editor.colors.TypeScript" />
   </component>
-  <component name="RunManager" selected="Cargo.Run">
+  <component name="RunManager" selected="Cargo.Expand rjs_engine::js::data::EngineConstants">
+    <configuration name="Expand rjs_engine::js::data::EngineConstants" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
+      <option name="channel" value="DEFAULT" />
+      <option name="command" value="expand --bin rjs_engine --color=always --theme=GitHub --tests js::data::EngineConstants" />
+      <option name="allFeatures" value="false" />
+      <option name="emulateTerminal" value="false" />
+      <option name="backtrace" value="SHORT" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
     <configuration name="Expand rjs_engine::js::data::js_code" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
       <option name="channel" value="DEFAULT" />
       <option name="command" value="expand --bin rjs_engine --color=always --theme=GitHub --tests js::data::js_code" />
@@ -105,6 +118,7 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Cargo.Expand rjs_engine::js::data::EngineConstants" />
         <item itemvalue="Cargo.Expand rjs_engine::js::data::js_code" />
       </list>
     </recent_temporary>
@@ -141,37 +155,37 @@
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
     <state x="418" y="177" key="#com.intellij.execution.impl.EditConfigurationsDialog/0.0.1920.1040@0.0.1920.1040" timestamp="1606798697310" />
-    <state x="773" y="240" width="374" height="556" key="#com.intellij.ide.util.MemberChooser" timestamp="1606939303162">
+    <state x="773" y="240" width="374" height="556" key="#com.intellij.ide.util.MemberChooser" timestamp="1606945713728">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state x="773" y="240" width="374" height="556" key="#com.intellij.ide.util.MemberChooser/0.0.1920.1040@0.0.1920.1040" timestamp="1606939303162" />
+    <state x="773" y="240" width="374" height="556" key="#com.intellij.ide.util.MemberChooser/0.0.1920.1040@0.0.1920.1040" timestamp="1606945713728" />
     <state x="773" y="241" key="#com.intellij.ide.util.MemberChooser/0.0.1920.1044@0.0.1920.1044" timestamp="1606865647733" />
     <state x="743" y="277" width="424" height="478" key="FileChooserDialogImpl" timestamp="1606784167928">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
     <state x="743" y="277" width="424" height="478" key="FileChooserDialogImpl/0.0.1920.1040@0.0.1920.1040" timestamp="1606784167928" />
-    <state width="1878" height="277" key="GridCell.Tab.0.bottom" timestamp="1606942034065">
+    <state width="1878" height="277" key="GridCell.Tab.0.bottom" timestamp="1606944564787">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state width="1878" height="277" key="GridCell.Tab.0.bottom/0.0.1920.1040@0.0.1920.1040" timestamp="1606942034065" />
+    <state width="1878" height="277" key="GridCell.Tab.0.bottom/0.0.1920.1040@0.0.1920.1040" timestamp="1606944564787" />
     <state width="1874" height="275" key="GridCell.Tab.0.bottom/0.0.1920.1044@0.0.1920.1044" timestamp="1606866658669" />
     <state width="1878" height="277" key="GridCell.Tab.0.bottom/0.0.2181.2120@0.0.2181.2120" timestamp="1606825251283" />
-    <state width="1878" height="277" key="GridCell.Tab.0.center" timestamp="1606942034065">
+    <state width="1878" height="277" key="GridCell.Tab.0.center" timestamp="1606944564787">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state width="1878" height="277" key="GridCell.Tab.0.center/0.0.1920.1040@0.0.1920.1040" timestamp="1606942034065" />
+    <state width="1878" height="277" key="GridCell.Tab.0.center/0.0.1920.1040@0.0.1920.1040" timestamp="1606944564787" />
     <state width="1874" height="275" key="GridCell.Tab.0.center/0.0.1920.1044@0.0.1920.1044" timestamp="1606866658667" />
     <state width="1878" height="277" key="GridCell.Tab.0.center/0.0.2181.2120@0.0.2181.2120" timestamp="1606825251282" />
-    <state width="1878" height="277" key="GridCell.Tab.0.left" timestamp="1606942034065">
+    <state width="1878" height="277" key="GridCell.Tab.0.left" timestamp="1606944564787">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state width="1878" height="277" key="GridCell.Tab.0.left/0.0.1920.1040@0.0.1920.1040" timestamp="1606942034065" />
+    <state width="1878" height="277" key="GridCell.Tab.0.left/0.0.1920.1040@0.0.1920.1040" timestamp="1606944564787" />
     <state width="1874" height="275" key="GridCell.Tab.0.left/0.0.1920.1044@0.0.1920.1044" timestamp="1606866658666" />
     <state width="1878" height="277" key="GridCell.Tab.0.left/0.0.2181.2120@0.0.2181.2120" timestamp="1606825251282" />
-    <state width="1878" height="277" key="GridCell.Tab.0.right" timestamp="1606942034065">
+    <state width="1878" height="277" key="GridCell.Tab.0.right" timestamp="1606944564787">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state width="1878" height="277" key="GridCell.Tab.0.right/0.0.1920.1040@0.0.1920.1040" timestamp="1606942034065" />
+    <state width="1878" height="277" key="GridCell.Tab.0.right/0.0.1920.1040@0.0.1920.1040" timestamp="1606944564787" />
     <state width="1874" height="275" key="GridCell.Tab.0.right/0.0.1920.1044@0.0.1920.1044" timestamp="1606866658668" />
     <state width="1878" height="277" key="GridCell.Tab.0.right/0.0.2181.2120@0.0.2181.2120" timestamp="1606825251283" />
     <state width="1878" height="342" key="GridCell.Tab.1.bottom" timestamp="1606916623226">
@@ -199,23 +213,23 @@
     </state>
     <state x="461" y="156" key="SettingsEditor/0.0.1920.1040@0.0.1920.1040" timestamp="1606927506783" />
     <state x="461" y="157" key="SettingsEditor/0.0.1920.1044@0.0.1920.1044" timestamp="1606185013649" />
-    <state x="768" y="436" key="com.intellij.openapi.vcs.update.UpdateOrStatusOptionsDialogupdate-v2" timestamp="1606815820342">
+    <state x="768" y="436" width="373" height="160" key="com.intellij.openapi.vcs.update.UpdateOrStatusOptionsDialogupdate-v2" timestamp="1606948648221">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state x="768" y="436" key="com.intellij.openapi.vcs.update.UpdateOrStatusOptionsDialogupdate-v2/0.0.1920.1040@0.0.1920.1040" timestamp="1606815820342" />
-    <state x="666" y="268" width="1042" height="532" key="find.popup" timestamp="1606916868977">
+    <state x="768" y="436" width="373" height="160" key="com.intellij.openapi.vcs.update.UpdateOrStatusOptionsDialogupdate-v2/0.0.1920.1040@0.0.1920.1040" timestamp="1606948648221" />
+    <state x="666" y="268" width="1042" height="532" key="find.popup" timestamp="1606947457443">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state x="666" y="268" width="1042" height="532" key="find.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606916868977" />
-    <state width="671" height="479" key="javadoc.popup.new" timestamp="1606941611008">
+    <state x="666" y="268" width="1042" height="532" key="find.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606947457443" />
+    <state width="671" height="479" key="javadoc.popup.new" timestamp="1606953953490">
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state width="671" height="479" key="javadoc.popup.new/0.0.1920.1040@0.0.1920.1040" timestamp="1606941611008" />
+    <state width="671" height="479" key="javadoc.popup.new/0.0.1920.1040@0.0.1920.1040" timestamp="1606953953490" />
     <state width="671" height="480" key="javadoc.popup.new/0.0.1920.1044@0.0.1920.1044" timestamp="1606867964218" />
-    <state x="624" y="238" key="run.anything.popup" timestamp="1606863076669">
-      <screen x="0" y="0" width="1920" height="1044" />
+    <state x="624" y="237" width="672" height="677" key="run.anything.popup" timestamp="1606945912393">
+      <screen x="0" y="0" width="1920" height="1040" />
     </state>
-    <state x="624" y="237" width="672" height="677" key="run.anything.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606820537364" />
+    <state x="624" y="237" width="672" height="677" key="run.anything.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606945912393" />
     <state x="624" y="238" key="run.anything.popup/0.0.1920.1044@0.0.1920.1044" timestamp="1606863076669" />
     <state x="709" y="483" width="764" height="1381" key="run.anything.popup/0.0.2181.2120@0.0.2181.2120" timestamp="1606823597709" />
     <state x="623" y="229" width="672" height="676" key="search.everywhere.popup" timestamp="1606933523227">

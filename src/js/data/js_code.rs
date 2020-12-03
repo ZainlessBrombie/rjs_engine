@@ -4,6 +4,7 @@ use crate::js::data::gc_util::GcDestr;
 use crate::js::data::js_execution::{build_demo_fn, EngineState, FnOp, JsVar};
 use crate::js::data::js_types;
 use crate::js::data::js_types::{JsNext, JsValue};
+use crate::js::data::util::{u_deref, u_literal, u_standard_load_global, u_string};
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -68,10 +69,12 @@ impl ScopeLookup {
             .map(|r| r.clone());
     }
 
-    fn insert_here(&mut self, name: Rc<String>) -> Option<JsVar> {
-        return self
-            .get(&name)
-            .or_else(|| self.cur.insert(name.clone(), JsVar::new(name)));
+    fn insert_here(&mut self, name: Rc<String>) -> JsVar {
+        return self.get(&name).unwrap_or_else(|| {
+            let ret = JsVar::new(name);
+            self.cur.insert(name.clone(), ret.clone());
+            ret
+        });
     }
 
     fn insert_top(&mut self, name: Rc<String>) -> JsVar {
@@ -132,12 +135,12 @@ impl JsEngine {
                             .collect(),
                     });
                 }
-                Stmt::Empty(stmt) => return GcDestr::new(FnOp::Nop {}),
-                Stmt::Debugger(stmt) => {
+                Stmt::Empty(_stmt) => return GcDestr::new(FnOp::Nop {}),
+                Stmt::Debugger(_stmt) => {
                     println!("Note: skipping debugger statement");
                     return GcDestr::new(FnOp::Nop {});
                 }
-                Stmt::With(with_stmt) => {
+                Stmt::With(_with_stmt) => {
                     println!("Note: skipping with statement");
                     return GcDestr::new(FnOp::Nop {});
                 }
@@ -154,11 +157,11 @@ impl JsEngine {
                         });
                     }
                 }
-                Stmt::Labeled(lbl) => {
+                Stmt::Labeled(_lbl) => {
                     println!("Note: label not supported");
                     return GcDestr::new(FnOp::Nop {});
                 }
-                Stmt::Break(break_stmt) => {
+                Stmt::Break(_break_stmt) => {
                     println!("Note: break not supported");
                     return GcDestr::new(FnOp::Nop {});
                 }
@@ -235,6 +238,9 @@ impl JsEngine {
                     .decls
                     .iter()
                     .map(|decl_single| {
+                        scopes
+                            .borrow_mut()
+                            .insert_here(Rc::new(ident.sym.to_string()));
                         let init = ScopeLookup::insert_here(
                             &mut RefCell::borrow_mut(&scopes),
                             Rc::new(unimplemented!()),
@@ -249,13 +255,32 @@ impl JsEngine {
     fn ingest_assignment<'a>(
         &self,
         scopes: Rc<RefCell<ScopeLookup>>,
-    ) -> Box<impl Fn(&Pat) -> GcDestr<FnOp>> {
-        return Box::new(|pat: &Pat| {
+    ) -> Box<impl Fn(&Pat, GcDestr<FnOp>) -> GcDestr<FnOp>> {
+        return Box::new(move |pat: &Pat, source| {
             match pat {
                 Pat::Ident(ident) => {
-                    println!("{}", ident.sym.to_string())
+                    let to = scopes
+                        .borrow_mut()
+                        .get(&Rc::new(ident.sym.to_string()))
+                        .unwrap_or_else(|| {
+                            scopes
+                                .borrow_mut()
+                                .insert_top(Rc::new(ident.sym.to_string()))
+                        });
+                    return GcDestr::new(FnOp::Assign {
+                        target: to,
+                        what: Box::new(source),
+                    });
                 }
-                Pat::Array(_) => {}
+                Pat::Array(arr) => {
+                    let iterator = u_deref(source, u_deref(
+                        u_standard_load_global("Symbol"),
+                        u_literal(u_string("iterator")),
+                    ));
+                    for x in &arr.elems {
+                        
+                    }
+                }
                 Pat::Rest(_) => {}
                 Pat::Object(_) => {}
                 Pat::Assign(_) => {}
