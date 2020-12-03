@@ -4,7 +4,10 @@ use crate::js::data::gc_util::GcDestr;
 use crate::js::data::js_execution::{build_demo_fn, EngineState, FnOp, JsVar};
 use crate::js::data::js_types;
 use crate::js::data::js_types::{JsNext, JsValue};
-use crate::js::data::util::{u_deref, u_literal, u_standard_load_global, u_string};
+use crate::js::data::util::{
+    u_array, u_block, u_call, u_call_simple, u_deref, u_if_else, u_literal, u_read_var, u_reusable,
+    u_standard_load_global, u_string, u_while, u_write_var,
+};
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -17,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use swc_common::errors::{DiagnosticBuilder, Emitter};
 use swc_common::sync::Lrc;
 use swc_common::{errors::Handler, FileName, SourceMap};
-use swc_ecma_ast::{Expr, Module, ModuleItem, Pat, Stmt, VarDecl, VarDeclOrExpr};
+use swc_ecma_ast::{Expr, Module, ModuleItem, ObjectPatProp, Pat, Stmt, VarDecl, VarDeclOrExpr};
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax};
 
 struct Empty {}
@@ -73,6 +76,14 @@ impl ScopeLookup {
         return self.get(&name).unwrap_or_else(|| {
             let ret = JsVar::new(name.clone());
             self.cur.insert(name.clone(), ret.clone());
+            ret
+        });
+    }
+
+    fn get_or_global(&mut self, name: Rc<String>) -> JsVar {
+        return self.get(&name).unwrap_or_else(|| {
+            let ret = JsVar::new(name.clone());
+            self.insert_top(name);
             ret
         });
     }
@@ -251,9 +262,9 @@ impl JsEngine {
     }
 
     fn ingest_assignment<'a>(
-        &self,
+        &'a self,
         scopes: Rc<RefCell<ScopeLookup>>,
-    ) -> Box<impl Fn(&Pat, GcDestr<FnOp>) -> GcDestr<FnOp>> {
+    ) -> Box<impl Fn(&'a Pat, GcDestr<FnOp>) -> GcDestr<FnOp>> {
         return Box::new(move |pat: &Pat, source| {
             match pat {
                 Pat::Ident(ident) => {
@@ -278,13 +289,115 @@ impl JsEngine {
                             u_literal(u_string("iterator")),
                         ),
                     );
-                    for x in &arr.elems {}
+                    let array = u_array();
+                    let (init1, it_provider) = u_reusable(iterator);
+                    let (init2, array_push_provider) = u_reusable(u_deref(
+                        u_literal(array.clone()),
+                        u_literal(u_string("push")),
+                    ));
+                    let mut result = Vec::new();
+                    result.push(init1);
+                    result.push(init2);
+                    for x in &arr.elems {
+                        if let Some(p) = x.as_ref() {
+                            if let Pat::Rest(rest) = p {
+                                let v = JsVar::new(Rc::new("#temp#".into()));
+                                let v2 = JsVar::new(Rc::new("#temp#".into()));
+                                v.set(JsValue::Boolean(true));
+                                result.push(u_while(
+                                    u_read_var(v),
+                                    u_block(vec![
+                                        u_write_var(v2.clone(), it_provider()),
+                                        u_if_else(
+                                            u_deref(
+                                                u_read_var(v2.clone()),
+                                                u_literal(u_string("done")),
+                                            ),
+                                            u_write_var(
+                                                v.clone(),
+                                                u_literal(JsValue::Boolean(false)),
+                                            ),
+                                            u_call(
+                                                array_push_provider(),
+                                                vec![u_deref(
+                                                    u_read_var(v2.clone()),
+                                                    u_literal(u_string("value")),
+                                                )],
+                                            ),
+                                        ),
+                                    ]),
+                                ));
+                                result.push(self.ingest_assignment(scopes.clone())(
+                                    &rest.arg,
+                                    u_literal(array),
+                                ));
+                                break;
+                            }
+                            result.push(self.ingest_assignment(scopes.clone())(
+                                p,
+                                u_call_simple(u_deref(it_provider(), u_literal(u_string("next")))),
+                            ));
+                        }
+                    }
+                    return GcDestr::new(FnOp::Multi { block: result });
                 }
-                Pat::Rest(_) => {}
-                Pat::Object(_) => {}
-                Pat::Assign(_) => {}
-                Pat::Invalid(_) => {}
-                Pat::Expr(_) => {}
+                Pat::Rest(_) => {
+                    unimplemented!("We SHOULD have handled this in the code above?!")
+                }
+                Pat::Object(obj) => {
+                    let mut result = Vec::new();
+                    let (init, target) = u_reusable(source);
+                    result.push(init);
+                    for pat_prop in &obj.props {
+                        match pat_prop {
+                            ObjectPatProp::KeyValue(key_value) => {
+                                // TODO is to_string ok?
+                                result.push(self.ingest_assignment(scopes.clone())(
+                                    &key_value.value,
+                                    u_deref(
+                                        target(),
+                                        u_literal(u_string(key_value.key.to_string().as_str())),
+                                    ),
+                                ))
+                            }
+                            ObjectPatProp::Assign(assign) => {
+                                if let Some(v) = &assign.value {
+                                    result.push(u_write_var(
+                                        scopes
+                                            .borrow_mut()
+                                            .get_or_global(Rc::new(assign.key.to_string())),
+                                        self.ingest_expression(scopes.clone())(v),
+                                    ));
+                                } else {
+                                    result.push(u_write_var(
+                                        scopes
+                                            .borrow_mut()
+                                            .get_or_global(Rc::new(assign.key.to_string())),
+                                        u_deref(
+                                            source.clone(),
+                                            u_literal(u_string(&assign.key.to_string())),
+                                        ),
+                                    ))
+                                }
+                            }
+                            ObjectPatProp::Rest(obj_rest) => {
+                                unimplemented!("Object rest destructing not complete because I want to execute code lol")
+                            }
+                        }
+                    }
+                }
+                Pat::Assign(assign) => {
+                    return self.ingest_assignment(scopes.clone())(
+                        &assign.left,
+                        self.ingest_expression(scopes.clone())(&assign.right),
+                    );
+                }
+                Pat::Invalid(invalid) => {
+                    unimplemented!("Invalid assignment is todo")
+                }
+                Pat::Expr(expr) => {
+                    return self.ingest_expression(scopes.clone())(&expr);
+                }
             }
             unimplemented!()
         });
@@ -297,8 +410,7 @@ impl JsEngine {
         return Box::new(|expr: &Expr| {
             match &expr {
                 Expr::This(_) => {
-                    println!("This is not supported yet");
-                    return GcDestr::new(FnOp::Nop {});
+                    return u_read_var(scopes.borrow_mut().get_or_global(Rc::new("this".into())));
                 }
                 Expr::Array(arr_lit) => {}
                 Expr::Object(_) => {}

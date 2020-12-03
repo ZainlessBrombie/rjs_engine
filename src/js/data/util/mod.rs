@@ -189,6 +189,17 @@ pub fn u_while(condition: GcDestr<FnOp>, block: GcDestr<FnOp>) -> GcDestr<FnOp> 
     });
 }
 
+pub fn u_reusable(what: GcDestr<FnOp>) -> (GcDestr<FnOp>, impl Fn() -> GcDestr<FnOp>) {
+    let temp = JsVar::new(Rc::new("#temp#".into()));
+    (u_write_var(temp.clone(), what), move || {
+        u_read_var(temp.clone())
+    })
+}
+
+pub fn u_array() -> JsValue {
+    return JsObjectBuilder::new(None).with_being_array().build();
+}
+
 pub fn u_deref(from: GcDestr<FnOp>, key: GcDestr<FnOp>) -> GcDestr<FnOp> {
     return GcDestr::new(FnOp::Deref {
         from: Box::new(from),
