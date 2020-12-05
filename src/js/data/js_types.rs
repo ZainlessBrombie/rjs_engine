@@ -245,6 +245,17 @@ pub struct JsObj {
     pub(crate) is_symbol: bool,
 }
 
+impl JsObj {
+    pub fn get_prop(&self, k: Rc<String>) -> JsValue {
+        self
+            .content
+            .get(&k)
+            .map(|prop| &prop.value)
+            .unwrap_or(&JsValue::Undefined)
+            .clone()
+    }
+}
+
 impl Hash for JsValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
@@ -287,6 +298,8 @@ impl JsValue {
         return JsValue::String(Rc::new(val.into()));
     }
 
+    /// Returns the safe, system internal representation of the string
+    /// like used in templating. Safe means no execution. Strings are returned literally.
     pub fn to_system_string(&self) -> Rc<String> {
         match self {
             JsValue::Undefined => "undefined".into(),

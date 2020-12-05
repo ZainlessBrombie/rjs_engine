@@ -8,7 +8,7 @@
   </component>
   <component name="CMakeSettings">
     <configurations>
-      <configuration PROFILE_NAME="Debug" CONFIG_NAME="Debug" ENABLED="true" />
+      <configuration PROFILE_NAME="Debug" CONFIG_NAME="Debug" />
     </configurations>
   </component>
   <component name="CargoProjects">
@@ -18,7 +18,10 @@
     <list default="true" id="0441aab0-0b7e-4cd4-9459-5b452a3382c1" name="Default Changelist" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/js/data/js_code.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/js_code.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/js/data/js_execution.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/js_execution.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/js/data/js_types.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/js_types.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/js/data/util/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/js/data/util/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -104,6 +107,11 @@
         <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
       </method>
     </configuration>
+    <configuration default="true" type="GradleAppRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" PASS_PARENT_ENVS_2="true">
+      <method v="2">
+        <option name="com.jetbrains.cidr.cpp.gradle.execution.GradleNativeBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
     <recent_temporary>
       <list>
         <item itemvalue="Cargo.Expand rjs_engine::js::data::EngineConstants" />
@@ -133,6 +141,7 @@
       <workItem from="1606780146991" duration="41545000" />
       <workItem from="1606860049264" duration="8170000" />
       <workItem from="1607027760794" duration="599000" />
+      <workItem from="1607157630604" duration="14653000" />
     </task>
     <servers />
   </component>
@@ -210,26 +219,27 @@
       <screen x="0" y="0" width="1920" height="1040" />
     </state>
     <state x="503" y="251" width="1388" height="733" key="com.intellij.xdebugger.impl.breakpoints.ui.BreakpointsDialogFactory$2/0.0.1920.1040@0.0.1920.1040" timestamp="1606958906546" />
-    <state x="666" y="268" width="1042" height="532" key="find.popup" timestamp="1606964206876">
-      <screen x="0" y="0" width="1920" height="1040" />
+    <state x="666" y="269" width="1042" height="535" key="find.popup" timestamp="1607170990155">
+      <screen x="0" y="0" width="1920" height="1044" />
     </state>
     <state x="666" y="268" width="1042" height="532" key="find.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606964206876" />
-    <state width="671" height="479" key="javadoc.popup.new" timestamp="1606971061503">
-      <screen x="0" y="0" width="1920" height="1040" />
+    <state x="666" y="269" width="1042" height="535" key="find.popup/0.0.1920.1044@0.0.1920.1044" timestamp="1607170990155" />
+    <state width="671" height="480" key="javadoc.popup.new" timestamp="1607173207171">
+      <screen x="0" y="0" width="1920" height="1044" />
     </state>
     <state width="671" height="479" key="javadoc.popup.new/0.0.1920.1040@0.0.1920.1040" timestamp="1606971061503" />
-    <state width="671" height="480" key="javadoc.popup.new/0.0.1920.1044@0.0.1920.1044" timestamp="1606867964218" />
-    <state x="624" y="237" width="672" height="677" key="run.anything.popup" timestamp="1606945912393">
-      <screen x="0" y="0" width="1920" height="1040" />
+    <state width="671" height="480" key="javadoc.popup.new/0.0.1920.1044@0.0.1920.1044" timestamp="1607173207171" />
+    <state x="624" y="238" key="run.anything.popup" timestamp="1607172517423">
+      <screen x="0" y="0" width="1920" height="1044" />
     </state>
     <state x="624" y="237" width="672" height="677" key="run.anything.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606945912393" />
-    <state x="624" y="238" key="run.anything.popup/0.0.1920.1044@0.0.1920.1044" timestamp="1606863076669" />
+    <state x="624" y="238" key="run.anything.popup/0.0.1920.1044@0.0.1920.1044" timestamp="1607172517423" />
     <state x="709" y="483" width="764" height="1381" key="run.anything.popup/0.0.2181.2120@0.0.2181.2120" timestamp="1606823597709" />
-    <state x="623" y="229" width="672" height="676" key="search.everywhere.popup" timestamp="1606964012307">
-      <screen x="0" y="0" width="1920" height="1040" />
+    <state x="623" y="230" width="672" height="678" key="search.everywhere.popup" timestamp="1607164565080">
+      <screen x="0" y="0" width="1920" height="1044" />
     </state>
     <state x="623" y="229" width="672" height="676" key="search.everywhere.popup/0.0.1920.1040@0.0.1920.1040" timestamp="1606964012307" />
-    <state x="623" y="230" width="672" height="678" key="search.everywhere.popup/0.0.1920.1044@0.0.1920.1044" timestamp="1606864686053" />
+    <state x="623" y="230" width="672" height="678" key="search.everywhere.popup/0.0.1920.1044@0.0.1920.1044" timestamp="1607164565080" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>

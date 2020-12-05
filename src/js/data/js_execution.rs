@@ -1,8 +1,10 @@
 use crate::js::data::gc_util::GcDestr;
+use crate::js::data::js_execution::FnOpResult::LoadThis;
 use crate::js::data::js_types::{JSCallable, JsFn, JsProperty, JsValue};
 use crate::js::data::util::{
-    u_and, u_block, u_call, u_deref, u_function, u_if, u_if_else, u_literal, u_not, u_read_var,
-    u_standard_load_global, u_strict_comp, u_string, u_typeof, u_write_var, JsObjectBuilder,
+    s_pool, u_and, u_block, u_call, u_capture_deref, u_deref, u_function, u_if, u_if_else,
+    u_literal, u_not, u_read_var, u_load_global, u_strict_comp, u_string, u_typeof,
+    u_write_var, JsObjectBuilder,
 };
 use gc::{Finalize, GcCellRef, Trace};
 use gc::{Gc, GcCell};
@@ -27,6 +29,8 @@ pub struct EngineQueuer {
 }
 
 impl EngineQueuer {
+    /// Pushes a js function into the event loop.
+    /// Does not have an inherent this - context
     pub fn enqueue_js_fn(&mut self, val: JsValue) {
         let mut guard = self
             .queue
@@ -41,6 +45,7 @@ impl EngineQueuer {
                         arg_vars: vec![],
                         arg_fillers: vec![],
                     })],
+                    this: Default::default(),
                     ret_store: JsVar::new(Rc::new("#ignored#".into())),
                 }],
             })))
@@ -199,6 +204,11 @@ impl AsyncStack {
                                 last.remaining_ops.rl_push_front(next); // TODO
                                 return (AsyncStackResult::Forget, consumed);
                             }
+                            FnOpResult::LoadThis { into, next } => {
+                                last.remaining_ops
+                                    .rl_push_front(u_write_var(into, u_literal(last.this.clone())));
+                                last.remaining_ops.rl_push_front(next);
+                            }
                         }
                     } else {
                         last.remaining_ops.rl_push_front(GcDestr::new(FnOp::Return {
@@ -247,6 +257,7 @@ fn throw_frame(val: JsValue) -> StackFrame {
         remaining_ops: vec![GcDestr::new(FnOp::Throw {
             what: Box::from(GcDestr::new(FnOp::LoadStatic { value: val })),
         })],
+        this: Default::default(),
         ret_store: JsVar::new(Rc::new("ignored".into())),
     };
 }
@@ -260,10 +271,10 @@ pub fn build_demo_fn() -> JsValue {
                 u_write_var(a.clone(), u_literal(u_string("heyho"))),
                 u_call(
                     u_deref(
-                        u_standard_load_global("console"),
+                        u_load_global("console"),
                         u_literal(u_string("log")),
                     ),
-                    vec![u_read_var(a)],
+                    u_read_var(a),
                 ),
             ])))),
         })
@@ -336,11 +347,21 @@ pub enum FnOp {
     ReadVar {
         which: JsVar,
     },
-    // Args are reversed for popping
     CallFunction {
         on: Box<GcDestr<FnOp>>,
-        arg_vars: Vec<JsVar>,
-        arg_fillers: Vec<GcDestr<FnOp>>,
+        arg_array: Box<GcDestr<FnOp>>,
+        on_var: JsVar,
+        args_var: JsVar,
+        this_var: JsVar,
+        ready: JsVar,
+    },
+    CaptureDeref {
+        into: JsVar,
+        what: Box<GcDestr<FnOp>>,
+    },
+    CaptureName {
+        into: JsVar,
+        what: Box<GcDestr<FnOp>>,
     },
     Throw {
         what: Box<GcDestr<FnOp>>,
@@ -406,6 +427,20 @@ pub enum FnOp {
         done: JsVar,
     },
     Await {},
+    AssignRef {
+        to: Box<GcDestr<FnOp>>,
+        key: Box<GcDestr<FnOp>>,
+        what: Box<GcDestr<FnOp>>,
+    },
+    LoadThis {},
+    Plus {
+        left: Box<GcDestr<FnOp>>,
+        right: Box<GcDestr<FnOp>>,
+    },
+    NumeralPlus {
+        left: Box<GcDestr<FnOp>>,
+        right: Box<GcDestr<FnOp>>,
+    }
 }
 
 impl FnOp {
@@ -481,6 +516,23 @@ impl FnOp {
             },
             _ => {
                 panic!("load_global needs ::LoadGlobal")
+            }
+        }
+    }
+
+    fn forward_this(
+        this_result: FnOpResult,
+        consumer: impl FnOnce(GcDestr<FnOp>) -> GcDestr<FnOp>,
+    ) -> FnOpResult {
+        match this_result {
+            FnOpResult::LoadThis { into, next } => {
+                return LoadThis {
+                    into,
+                    next: consumer(next),
+                }
+            }
+            _ => {
+                panic!("forward_this nees ::LoadThis")
             }
         }
     }
@@ -574,6 +626,12 @@ impl FnOp {
                         })
                     }
                     FnOpResult::Await { .. } => result,
+                    FnOpResult::LoadThis { .. } => FnOp::forward_this(result, |loaded| {
+                        GcDestr::new(FnOp::Assign {
+                            target: target.clone(),
+                            what: Box::from(loaded),
+                        })
+                    }),
                 }
             }
             FnOp::LoadStatic { value } => FnOpResult::Value {
@@ -588,77 +646,39 @@ impl FnOp {
             },
             FnOp::CallFunction {
                 on,
-                ref mut arg_vars,
-                arg_fillers,
+                arg_array,
+                on_var,
+                args_var,
+                this_var,
+                ready,
             } => {
-                if arg_fillers.is_empty() {
-                    let result = FnOp::run(on.destroy_move(), max_cost);
-                    match result {
-                        FnOpResult::Dissolve { .. } => FnOp::do_dissolve(result, |then| {
-                            GcDestr::new(FnOp::CallFunction {
-                                on: Box::from(then),
-                                arg_vars: take(arg_vars),
-                                arg_fillers: vec![],
-                            })
-                        }),
-                        FnOpResult::Throw { .. } => result,
-                        FnOpResult::Return { .. } => result,
-                        FnOpResult::Value { cost, what, from } => {
-                            let temp_var = JsVar::new(Rc::new("#result_holder#".into()));
-                            FnOpResult::Call {
-                                cost: cost + 1,
-                                on: what,
-                                args: take(arg_vars),
-                                result: temp_var.clone(),
-                                next: GcDestr::new(FnOp::ReadVar { which: temp_var }),
-                                this: from,
-                            }
-                        }
-                        FnOpResult::Ongoing { cost, next } => FnOpResult::Ongoing {
-                            cost,
-                            next: GcDestr::new(FnOp::CallFunction {
-                                on: Box::from(next),
-                                arg_vars: take(arg_vars),
-                                arg_fillers: vec![],
-                            }),
-                        },
-                        FnOpResult::Call { .. } => FnOp::forward_load_global(result, |op| {
-                            GcDestr::new(FnOp::CallFunction {
-                                on: Box::from(op),
-                                arg_vars: arg_vars.clone(),
-                                arg_fillers: vec![],
-                            })
-                        }),
-                        FnOpResult::LoadGlobal { .. } => {
-                            FnOp::forward_load_global(result, |loaded| {
-                                GcDestr::new(FnOp::CallFunction {
-                                    on: Box::from(loaded),
-                                    arg_vars: take(arg_vars),
-                                    arg_fillers: vec![],
-                                })
-                            })
-                        }
-                        FnOpResult::Await { .. } => {
-                            return result;
-                        }
+                if ready.get().truthy() {
+                    let temp_var = JsVar::new(Rc::new("#result_holder#".into()));
+                    FnOpResult::Call {
+                        cost: 1,
+                        on: on_var.get(),
+                        args: args_var.get(),
+                        result: temp_var.clone(),
+                        next: GcDestr::new(FnOp::ReadVar { which: temp_var }),
+                        this: this_var.get(),
                     }
                 } else {
+                    let (on, deref) = u_capture_deref(on.destroy_move());
                     FnOpResult::Dissolve {
-                        next: arg_fillers
-                            .drain(..)
-                            .zip((&mut arg_vars.clone()).drain(..))
-                            .map(|filler_var| {
-                                GcDestr::new(FnOp::Assign {
-                                    target: filler_var.1.clone(),
-                                    what: Box::from(filler_var.0),
-                                })
-                            })
-                            .chain(vec![GcDestr::new(FnOp::CallFunction {
-                                on: Box::from(on.destroy_move()),
-                                arg_vars: take(arg_vars),
-                                arg_fillers: vec![],
-                            })])
-                            .collect(),
+                        next: vec![
+                            u_write_var(on_var.clone(), on),
+                            u_write_var(this_var.clone(), deref),
+                            u_write_var(args_var.clone(), arg_array.destroy_move()),
+                            u_write_var(ready.clone(), u_literal(JsValue::Boolean(true))),
+                            GcDestr::new(FnOp::CallFunction {
+                                on: Box::from(FnOp::throw_internal("call_fn(1)")),
+                                arg_array: Box::from(FnOp::throw_internal("call_fn(2)")),
+                                on_var: on_var.clone(),
+                                args_var: args_var.clone(),
+                                this_var: this_var.clone(),
+                                ready: ready.clone(),
+                            }),
+                        ],
                         cost: 1,
                     }
                 }
@@ -703,6 +723,11 @@ impl FnOp {
                     FnOpResult::Await { .. } => {
                         return result;
                     }
+                    FnOpResult::LoadThis { .. } => FnOp::forward_this(result, |op| {
+                        GcDestr::new(FnOp::Throw {
+                            what: Box::from(op),
+                        })
+                    }),
                 }
             }
             FnOp::Deref {
@@ -934,6 +959,13 @@ impl FnOp {
                         })
                     }
                     FnOpResult::Await { .. } => condition_result,
+                    FnOpResult::LoadThis { .. } => FnOp::forward_this(condition_result, |op| {
+                        GcDestr::new(FnOp::IfElse {
+                            condition: Box::from(op),
+                            if_block: Box::from(if_block.destroy_move()),
+                            else_block: Box::from(else_block.destroy_move()),
+                        })
+                    }),
                 }
             }
             FnOp::While { condition, block } => {
@@ -1033,6 +1065,11 @@ impl FnOp {
                     FnOpResult::Await { .. } => FnOp::forward_await(ret, |what| {
                         GcDestr::new(FnOp::Return {
                             what: Box::from(what),
+                        })
+                    }),
+                    FnOpResult::LoadThis { .. } => FnOp::forward_this(ret, |global| {
+                        GcDestr::new(FnOp::Return {
+                            what: Box::from(global),
                         })
                     }),
                 }
@@ -1240,7 +1277,7 @@ pub enum FnOpResult {
     Call {
         cost: u64,
         on: JsValue,
-        args: Vec<JsVar>,
+        args: JsValue,
         result: JsVar,
         next: GcDestr<FnOp>,
         this: JsValue,
@@ -1256,12 +1293,17 @@ pub enum FnOpResult {
         into: JsVar,
         next: GcDestr<FnOp>,
     },
+    LoadThis {
+        into: JsVar,
+        next: GcDestr<FnOp>,
+    },
 }
 
 #[derive(Trace, Finalize)]
 pub struct StackFrame {
     pub(crate) vars: Vec<JsVar>,
     pub(crate) remaining_ops: Vec<GcDestr<FnOp>>, // REVERSE ORDER list of remaining ops. Using pop
+    pub(crate) this: JsValue,
     pub(crate) ret_store: JsVar,
 }
 
@@ -1276,6 +1318,14 @@ impl JsVar {
     fn map<T>(&self, mapper: impl FnOnce(&JsValue) -> T) -> T {
         let br = GcCell::borrow(&self.value);
         return mapper(br.borrow());
+    }
+
+    pub fn new_t() -> JsVar {
+        return JsVar::new_n("#temp#");
+    }
+
+    pub fn new_n(name: &'static str) -> JsVar {
+        return JsVar::new(s_pool(name));
     }
 
     pub fn new(name: Rc<String>) -> JsVar {

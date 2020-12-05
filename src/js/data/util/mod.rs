@@ -1,8 +1,12 @@
 use crate::js::data::gc_util::GcDestr;
-use crate::js::data::js_execution::{FnOp, JsVar, StackFrame};
+use crate::js::data::js_execution::{FnOp, FnOpResult, JsVar, StackFrame};
 use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsObj, JsProperty, JsValue};
 use crate::js::data::EngineConstants::{ConstantStrings, EngineConstants};
 use gc::{Gc, GcCell};
+use std::cell::RefCell;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::os::raw::c_void;
 use std::rc::Rc;
 
 pub struct JsObjectBuilder<'a> {
@@ -97,7 +101,7 @@ impl<'a> JsObjectBuilder<'a> {
     }
 }
 
-pub fn u_standard_load_global(name: &str) -> GcDestr<FnOp> {
+pub fn u_load_global(name: &str) -> GcDestr<FnOp> {
     return GcDestr::new(FnOp::LoadGlobal {
         name: Rc::new(name.to_string()),
     });
@@ -116,6 +120,80 @@ pub fn u_write_var(var: JsVar, what: GcDestr<FnOp>) -> GcDestr<FnOp> {
 
 pub fn u_literal(value: JsValue) -> GcDestr<FnOp> {
     return GcDestr::new(FnOp::LoadStatic { value });
+}
+
+pub fn u_obj() -> JsValue {
+    JsObjectBuilder::new(None).build()
+}
+
+pub fn u_this() -> GcDestr<FnOp> {
+    return GcDestr::new(FnOp::LoadThis {});
+}
+
+pub fn u_plus_num(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> {
+    return GcDestr::new(FnOp::NumeralPlus {
+        left: Box::new(left),
+        right: Box::new(right),
+    });
+}
+
+pub fn u_plus(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> {
+    return GcDestr::new(FnOp::Plus {
+        left: Box::new(left),
+        right: Box::new(right),
+    });
+}
+
+pub fn u_capture_name(mut of: GcDestr<FnOp>) -> (GcDestr<FnOp>, GcDestr<FnOp>) {
+    let done = JsVar::new_t();
+    let name = JsVar::new_t();
+    let ret_val = JsVar::new_t();
+    let init = u_cached(u_if(
+        u_not(u_read_var(done.clone())),
+        u_block(vec![u_write_var(
+            ret_val.clone(),
+            GcDestr::new(FnOp::CaptureName {
+                into: name.clone(),
+                what: Box::from(of.destroy_move()),
+            }),
+        )]),
+    ));
+    return (
+        u_block(vec![init(), u_read_var(name)]),
+        u_block(vec![init(), u_read_var(ret_val)]),
+    );
+}
+
+pub fn u_null() -> JsValue {
+    JsValue::Null
+}
+
+pub fn u_undefined() -> JsValue {
+    JsValue::Undefined
+}
+
+pub fn u_number(n: f64) -> JsValue {
+    return JsValue::Number(n);
+}
+
+pub fn u_bool(b: bool) -> JsValue {
+    return JsValue::Boolean(b);
+}
+
+pub fn u_false() -> JsValue {
+    u_bool(false)
+}
+
+pub fn u_true() -> JsValue {
+    u_bool(true)
+}
+
+pub fn u_assign(to: GcDestr<FnOp>, key: GcDestr<FnOp>, what: GcDestr<FnOp>) -> GcDestr<FnOp> {
+    return GcDestr::new(FnOp::AssignRef {
+        to: Box::new(to),
+        key: Box::new(key),
+        what: Box::new(what),
+    });
 }
 
 pub fn u_if(cond: GcDestr<FnOp>, if_b: GcDestr<FnOp>) -> GcDestr<FnOp> {
@@ -189,15 +267,48 @@ pub fn u_while(condition: GcDestr<FnOp>, block: GcDestr<FnOp>) -> GcDestr<FnOp> 
     });
 }
 
-pub fn u_reusable(what: GcDestr<FnOp>) -> (GcDestr<FnOp>, impl Fn() -> GcDestr<FnOp>) {
-    let temp = JsVar::new(Rc::new("#temp#".into()));
-    (u_write_var(temp.clone(), what), move || {
-        u_read_var(temp.clone())
-    })
+pub fn u_cached(mut what: GcDestr<FnOp>) -> impl FnMut() -> GcDestr<FnOp> {
+    let temp = JsVar::new_t();
+    let done = JsVar::new_t();
+    return move || {
+        u_block(vec![
+            u_if(
+                u_not(u_read_var(done.clone())),
+                u_block(vec![
+                    u_write_var(temp.clone(), what.destroy_move()),
+                    u_write_var(done.clone(), u_literal(JsValue::Boolean(true))),
+                ]),
+            ),
+            u_read_var(temp.clone()),
+        ])
+    };
 }
 
-pub fn u_array() -> JsValue {
-    return JsObjectBuilder::new(None).with_being_array().build();
+pub fn u_array(mut values: Vec<GcDestr<FnOp>>) -> GcDestr<FnOp> {
+    let arr = JsObjectBuilder::new(None).with_being_array().build();
+    let mut ops = Vec::new();
+    for (i, v) in values.iter_mut().enumerate() {
+        ops.push(u_assign(
+            u_literal(arr.clone()),
+            u_literal(JsValue::Number(i as f64)),
+            v.destroy_move(),
+        ))
+    }
+    ops.push(u_literal(arr.clone()));
+    u_block(ops)
+}
+
+pub fn u_array_e() -> JsValue {
+    JsObjectBuilder::new(None).with_being_array().build()
+}
+
+/// Returns (hasNext, value)
+pub fn u_it_next(it: GcDestr<FnOp>) -> (GcDestr<FnOp>, GcDestr<FnOp>) {
+    let returned = u_cached(u_call_simple(it));
+    return (
+        u_deref(returned(), u_literal(u_string("done"))),
+        u_deref(returned(), u_literal(u_string("value"))),
+    );
 }
 
 pub fn u_deref(from: GcDestr<FnOp>, key: GcDestr<FnOp>) -> GcDestr<FnOp> {
@@ -233,16 +344,50 @@ pub fn u_function(b: GcDestr<FnOp>) -> JsValue {
 }
 
 pub fn u_call_simple(on: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    u_call(on, vec![])
+    u_call(
+        on,
+        u_literal(JsObjectBuilder::new(None).with_being_array().build()),
+    )
 }
 
-pub fn u_call(on: GcDestr<FnOp>, args: Vec<GcDestr<FnOp>>) -> GcDestr<FnOp> {
+pub fn u_call(on: GcDestr<FnOp>, args: GcDestr<FnOp>) -> GcDestr<FnOp> {
     return GcDestr::new(FnOp::CallFunction {
         on: Box::new(on),
-        arg_vars: (0..args.len())
-            .into_iter()
-            .map(|i| JsVar::new(Rc::new("#temp#".into())))
-            .collect(),
-        arg_fillers: args,
+        arg_array: Box::from(args),
+        on_var: JsVar::new(Rc::new("#temp#".into())),
+        args_var: JsVar::new(Rc::new("#temp#".into())),
+        this_var: JsVar::new(Rc::new("#temp#".into())),
+        ready: JsVar::new(Rc::new("#temp#".into())),
     });
+}
+
+// TODO multi needs to return last. does it? <- what do I mean by that? ._.
+pub fn u_capture_deref(of: GcDestr<FnOp>) -> (GcDestr<FnOp>, GcDestr<FnOp>) {
+    let v = JsVar::new(s_pool("#temp#"));
+    let val = GcDestr::new(FnOp::CaptureDeref {
+        into: v.clone(),
+        what: Box::new(of),
+    });
+    let from = u_read_var(v);
+    return (val, from);
+}
+
+thread_local! {
+    static str_pool: RefCell<HashMap<usize, Rc<String>>> = RefCell::new(Default::default());
+}
+
+pub fn s_pool(s: &'static str) -> Rc<String> {
+    str_pool.with(|map| {
+        match map
+            .borrow_mut()
+            .entry(s as *const str as *const c_void as usize)
+        {
+            Entry::Occupied(o) => o.get().clone(),
+            Entry::Vacant(o) => {
+                let ret = Rc::new(s.to_string());
+                o.insert(ret.clone());
+                ret
+            }
+        }
+    })
 }
