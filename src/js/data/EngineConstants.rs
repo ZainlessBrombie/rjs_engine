@@ -44,10 +44,7 @@ impl EngineConstants {
                 creator: Gc::new(JsFn::simple_call((), move |_, mut args| {
                     Ok(JsObjectBuilder::new(Some(&strings_clone))
                         .with_being_symbol()
-                        .with_prop(
-                            strings_clone.description.clone(),
-                            args.drain(..).next().unwrap_or(JsValue::Undefined),
-                        )
+                        .with_prop(strings_clone.description.clone(), args)
                         .build())
                 })),
             })

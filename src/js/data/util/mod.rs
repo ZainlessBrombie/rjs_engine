@@ -1,5 +1,5 @@
 use crate::js::data::gc_util::GcDestr;
-use crate::js::data::js_execution::{FnOp, FnOpResult, JsVar, StackFrame};
+use crate::js::data::js_execution::{FnOpRepr, FnOpResult, JsVar, StackFrame};
 use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsObj, JsProperty, JsValue};
 use crate::js::data::EngineConstants::{ConstantStrings, EngineConstants};
 use gc::{Gc, GcCell};
@@ -101,49 +101,55 @@ impl<'a> JsObjectBuilder<'a> {
     }
 }
 
-pub fn u_load_global(name: &str) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::LoadGlobal {
+pub fn u_load_global(name: &str) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::LoadGlobal {
         name: Rc::new(name.to_string()),
     });
 }
 
-pub fn u_read_var(var: JsVar) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::ReadVar { which: var });
+pub fn u_read_var(var: JsVar) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::ReadVar { which: var });
 }
 
-pub fn u_write_var(var: JsVar, what: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::Assign {
+pub fn u_return(ret: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    GcDestr::new(FnOpRepr::Return {
+        what: Box::from(ret),
+    })
+}
+
+pub fn u_write_var(var: JsVar, what: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::Assign {
         target: var,
         what: Box::from(what),
     });
 }
 
-pub fn u_literal(value: JsValue) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::LoadStatic { value });
+pub fn u_literal(value: JsValue) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::LoadStatic { value });
 }
 
 pub fn u_obj() -> JsValue {
     JsObjectBuilder::new(None).build()
 }
 
-pub fn u_this() -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::LoadThis {});
+pub fn u_this() -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::LoadThis {});
 }
 
-pub fn u_plus_num(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::NumeralPlus {
+pub fn u_plus_num(left: GcDestr<FnOpRepr>, right: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::NumeralPlus {
         left: Box::new(left),
         right: Box::new(right),
     });
 }
 
-pub fn u_plus(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::Plus {
+pub fn u_plus(left: GcDestr<FnOpRepr>, right: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::Plus {
         left: Box::new(left),
         right: Box::new(right),
     });
 }
-
+/*
 pub fn u_capture_name(mut of: GcDestr<FnOp>) -> (GcDestr<FnOp>, GcDestr<FnOp>) {
     let done = JsVar::new_t();
     let name = JsVar::new_t();
@@ -162,7 +168,7 @@ pub fn u_capture_name(mut of: GcDestr<FnOp>) -> (GcDestr<FnOp>, GcDestr<FnOp>) {
         u_block(vec![init(), u_read_var(name)]),
         u_block(vec![init(), u_read_var(ret_val)]),
     );
-}
+}*/
 
 pub fn u_null() -> JsValue {
     JsValue::Null
@@ -188,34 +194,38 @@ pub fn u_true() -> JsValue {
     u_bool(true)
 }
 
-pub fn u_assign(to: GcDestr<FnOp>, key: GcDestr<FnOp>, what: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::AssignRef {
+pub fn u_assign(
+    to: GcDestr<FnOpRepr>,
+    key: GcDestr<FnOpRepr>,
+    what: GcDestr<FnOpRepr>,
+) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::AssignRef {
         to: Box::new(to),
         key: Box::new(key),
         what: Box::new(what),
     });
 }
 
-pub fn u_if(cond: GcDestr<FnOp>, if_b: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    u_if_else(cond, if_b, GcDestr::new(FnOp::Nop {}))
+pub fn u_if(cond: GcDestr<FnOpRepr>, if_b: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    u_if_else(cond, if_b, GcDestr::new(FnOpRepr::Nop {}))
 }
 
-pub fn u_and(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::BoolAnd {
+pub fn u_and(left: GcDestr<FnOpRepr>, right: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::BoolAnd {
         left: Box::from(left),
         right: Box::from(right),
     });
 }
 
-pub fn u_or(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::BoolOr {
+pub fn u_or(left: GcDestr<FnOpRepr>, right: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::BoolOr {
         left: Box::from(left),
         right: Box::from(right),
     });
 }
 
-pub fn u_strict_comp(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::StrictCompare {
+pub fn u_strict_comp(left: GcDestr<FnOpRepr>, right: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::StrictCompare {
         left: Box::new(left),
         right: Box::new(right),
         l_store: JsVar::new(Rc::new("#temp#".into())),
@@ -224,8 +234,8 @@ pub fn u_strict_comp(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp>
     });
 }
 
-pub fn u_fuzzy_comp(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::FuzzyCompare {
+pub fn u_fuzzy_comp(left: GcDestr<FnOpRepr>, right: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::FuzzyCompare {
         left: Box::new(left),
         right: Box::new(right),
         l_store: JsVar::new(Rc::new("#temp#".into())),
@@ -234,40 +244,44 @@ pub fn u_fuzzy_comp(left: GcDestr<FnOp>, right: GcDestr<FnOp>) -> GcDestr<FnOp> 
     });
 }
 
-pub fn u_typeof(of: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::TypeOf {
+pub fn u_typeof(of: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::TypeOf {
         of: Box::new(of),
         result: JsVar::new(Rc::new("#temp#".into())),
         done: JsVar::new(Rc::new("#temp#".into())),
     });
 }
 
-pub fn u_if_else(cond: GcDestr<FnOp>, if_b: GcDestr<FnOp>, else_b: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::IfElse {
+pub fn u_if_else(
+    cond: GcDestr<FnOpRepr>,
+    if_b: GcDestr<FnOpRepr>,
+    else_b: GcDestr<FnOpRepr>,
+) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::IfElse {
         condition: Box::from(cond),
         if_block: Box::from(if_b),
         else_block: Box::from(else_b),
     });
 }
 
-pub fn u_throw(what: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::Throw {
+pub fn u_throw(what: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::Throw {
         what: Box::from(what),
     });
 }
 
-pub fn u_not(of: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::BoolNot { of: Box::new(of) });
+pub fn u_not(of: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::BoolNot { of: Box::new(of) });
 }
 
-pub fn u_while(condition: GcDestr<FnOp>, block: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::While {
+pub fn u_while(condition: GcDestr<FnOpRepr>, block: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::While {
         condition: Box::new(condition),
         block: Box::new(block),
     });
 }
 
-pub fn u_cached(mut what: GcDestr<FnOp>) -> impl FnMut() -> GcDestr<FnOp> {
+pub fn u_cached(mut what: GcDestr<FnOpRepr>) -> impl FnMut() -> GcDestr<FnOpRepr> {
     let temp = JsVar::new_t();
     let done = JsVar::new_t();
     return move || {
@@ -284,7 +298,7 @@ pub fn u_cached(mut what: GcDestr<FnOp>) -> impl FnMut() -> GcDestr<FnOp> {
     };
 }
 
-pub fn u_array(mut values: Vec<GcDestr<FnOp>>) -> GcDestr<FnOp> {
+pub fn u_array(mut values: Vec<GcDestr<FnOpRepr>>) -> GcDestr<FnOpRepr> {
     let arr = JsObjectBuilder::new(None).with_being_array().build();
     let mut ops = Vec::new();
     for (i, v) in values.iter_mut().enumerate() {
@@ -303,7 +317,7 @@ pub fn u_array_e() -> JsValue {
 }
 
 /// Returns (hasNext, value)
-pub fn u_it_next(it: GcDestr<FnOp>) -> (GcDestr<FnOp>, GcDestr<FnOp>) {
+pub fn u_it_next(it: GcDestr<FnOpRepr>) -> (GcDestr<FnOpRepr>, GcDestr<FnOpRepr>) {
     let returned = u_cached(u_call_simple(it));
     return (
         u_deref(returned(), u_literal(u_string("done"))),
@@ -311,8 +325,8 @@ pub fn u_it_next(it: GcDestr<FnOp>) -> (GcDestr<FnOp>, GcDestr<FnOp>) {
     );
 }
 
-pub fn u_deref(from: GcDestr<FnOp>, key: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::Deref {
+pub fn u_deref(from: GcDestr<FnOpRepr>, key: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::Deref {
         from: Box::new(from),
         key: Box::new(key),
         from_store: JsVar::new(Rc::new("#temp#".into())),
@@ -326,32 +340,33 @@ pub fn u_string(s: &str) -> JsValue {
     return JsValue::String(Rc::new(s.into()));
 }
 
-pub fn u_block(b: Vec<GcDestr<FnOp>>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::Multi { block: b });
+pub fn u_block(b: Vec<GcDestr<FnOpRepr>>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::Multi { block: b });
 }
 
-pub fn u_function(b: GcDestr<FnOp>) -> JsValue {
+pub fn u_function(b: GcDestr<FnOpRepr>) -> JsValue {
     return JsObjectBuilder::new(None)
         .with_callable(JSCallable::Js {
             content: Rc::new("#manual#".to_string()),
             creator: Gc::from(JsFn::new(b, move |f, ret, args, this| StackFrame {
                 vars: vec![],
                 remaining_ops: vec![f.destroy_move()],
+                this,
                 ret_store: ret,
             })),
         })
         .build();
 }
 
-pub fn u_call_simple(on: GcDestr<FnOp>) -> GcDestr<FnOp> {
+pub fn u_call_simple(on: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
     u_call(
         on,
         u_literal(JsObjectBuilder::new(None).with_being_array().build()),
     )
 }
 
-pub fn u_call(on: GcDestr<FnOp>, args: GcDestr<FnOp>) -> GcDestr<FnOp> {
-    return GcDestr::new(FnOp::CallFunction {
+pub fn u_call(on: GcDestr<FnOpRepr>, args: GcDestr<FnOpRepr>) -> GcDestr<FnOpRepr> {
+    return GcDestr::new(FnOpRepr::CallFunction {
         on: Box::new(on),
         arg_array: Box::from(args),
         on_var: JsVar::new(Rc::new("#temp#".into())),
@@ -362,9 +377,9 @@ pub fn u_call(on: GcDestr<FnOp>, args: GcDestr<FnOp>) -> GcDestr<FnOp> {
 }
 
 // TODO multi needs to return last. does it? <- what do I mean by that? ._.
-pub fn u_capture_deref(of: GcDestr<FnOp>) -> (GcDestr<FnOp>, GcDestr<FnOp>) {
+pub fn u_capture_deref(of: GcDestr<FnOpRepr>) -> (GcDestr<FnOpRepr>, GcDestr<FnOpRepr>) {
     let v = JsVar::new(s_pool("#temp#"));
-    let val = GcDestr::new(FnOp::CaptureDeref {
+    let val = GcDestr::new(FnOpRepr::CaptureDeref {
         into: v.clone(),
         what: Box::new(of),
     });

@@ -1,5 +1,5 @@
 use crate::js::data::gc_util::GcDestr;
-use crate::js::data::js_execution::{FnOp, StackFrame};
+use crate::js::data::js_execution::{FnOpRepr, StackFrame};
 use crate::js::data::js_types::{JSCallable, JsFn, JsValue};
 use crate::js::data::util::JsObjectBuilder;
 use crate::js::data::EngineConstants::{ConstantStrings, EngineConstants};

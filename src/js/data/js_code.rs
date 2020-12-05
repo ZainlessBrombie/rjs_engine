@@ -1,17 +1,18 @@
 extern crate swc_ecma_parser;
 use self::swc_ecma_parser::JscTarget;
 use crate::js::data::gc_util::GcDestr;
-use crate::js::data::js_execution::{build_demo_fn, EngineState, FnOp, JsVar};
+use crate::js::data::js_execution::{build_demo_fn, EngineState, FnOpRepr, JsVar, StackFrame};
 use crate::js::data::js_types;
-use crate::js::data::js_types::{JsNext, JsValue};
+use crate::js::data::js_types::{JSCallable, JsFn, JsNext, JsObj, JsValue};
 use crate::js::data::util::{
     s_pool, u_array, u_array_e, u_assign, u_block, u_bool, u_cached, u_call, u_call_simple,
     u_deref, u_function, u_if, u_if_else, u_it_next, u_literal, u_load_global, u_not, u_null,
-    u_number, u_obj, u_plus_num, u_read_var, u_reusable, u_string, u_this, u_true, u_undefined,
+    u_number, u_obj, u_plus_num, u_read_var, u_return, u_string, u_this, u_true, u_undefined,
     u_while, u_write_var, JsObjectBuilder,
 };
-use std::alloc::Global;
+use gc::{Finalize, Gc, GcCell, Trace};
 use std::any::Any;
+use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Write;
@@ -25,8 +26,8 @@ use swc_common::errors::{DiagnosticBuilder, Emitter};
 use swc_common::sync::Lrc;
 use swc_common::{errors::Handler, FileName, SourceMap};
 use swc_ecma_ast::{
-    Expr, ExprOrSpread, ExprOrSuper, Lit, Module, ModuleItem, ObjectPatProp, Pat, Prop, PropName,
-    PropOrSpread, Stmt, VarDecl, VarDeclOrExpr,
+    ArrowExpr, BlockStmtOrExpr, Expr, ExprOrSpread, ExprOrSuper, Function, Lit, Module, ModuleItem,
+    ObjectPatProp, Pat, Prop, PropName, PropOrSpread, Stmt, VarDecl, VarDeclOrExpr,
 };
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax};
 
@@ -51,16 +52,18 @@ pub struct JsEngine {
 struct JsEngineInternal {
     max_mem: u64,
     cur_mem: AtomicU64,
+    state: EngineState,
 }
 
+#[derive(Trace, Finalize)]
 struct ScopeLookup {
     cur: HashMap<Rc<String>, JsVar>,
-    prev: Option<Rc<RefCell<ScopeLookup>>>,
+    prev: Option<Rc<GcCell<ScopeLookup>>>,
 }
 
 impl ScopeLookup {
-    fn new(prev: Option<&Rc<RefCell<ScopeLookup>>>) -> Rc<RefCell<ScopeLookup>> {
-        Rc::new(RefCell::new(ScopeLookup {
+    fn new(prev: Option<&Rc<GcCell<ScopeLookup>>>) -> Rc<GcCell<ScopeLookup>> {
+        Rc::new(GcCell::new(ScopeLookup {
             cur: Default::default(),
             prev: prev.map_or(None, |r| Some(r.clone())),
         }))
@@ -74,7 +77,7 @@ impl ScopeLookup {
             .or_else(|| {
                 self.prev
                     .as_ref()
-                    .map_or(None, |mut p| RefCell::borrow_mut(&p).get(&name))
+                    .map_or(None, |mut p| GcCell::borrow_mut(&p).get(&name))
             })
             .map(|r| r.clone());
     }
@@ -97,7 +100,7 @@ impl ScopeLookup {
 
     fn insert_top(&mut self, name: Rc<String>) -> JsVar {
         if let Some(prev) = &self.prev {
-            return RefCell::borrow_mut(prev).insert_top(name);
+            return GcCell::borrow_mut(prev).insert_top(name);
         } else {
             let v = JsVar::new(name.clone());
             self.cur.insert(name.clone(), v.clone());
@@ -112,6 +115,10 @@ impl JsEngine {
             eng: Rc::new(JsEngineInternal {
                 max_mem: 1_000_000,
                 cur_mem: AtomicU64::new(0),
+                state: EngineState {
+                    tick_queue: vec![],
+                    external_calls: Arc::new(Mutex::new(vec![])),
+                },
             }),
         };
     }
@@ -124,7 +131,7 @@ impl JsEngine {
             .map(|mod_item| match mod_item {
                 ModuleItem::ModuleDecl(_declr) => {
                     println!("Skipping module item!");
-                    return GcDestr::new(FnOp::Nop {});
+                    return GcDestr::new(FnOpRepr::Nop {});
                 }
                 ModuleItem::Stmt(stmt) => {
                     return unimplemented!();
@@ -138,14 +145,14 @@ impl JsEngine {
 
     fn ingest_statement<'a>(
         &'a self,
-        scopes: Rc<RefCell<ScopeLookup>>,
-    ) -> Box<impl Fn(&'a Stmt) -> GcDestr<FnOp>> {
+        scopes: Rc<GcCell<ScopeLookup>>,
+    ) -> Box<impl Fn(&'a Stmt) -> GcDestr<FnOpRepr>> {
         return Box::new(move |stmt: &'a Stmt| {
             let this = self;
             match &stmt {
                 Stmt::Block(block) => {
                     let block_scope = ScopeLookup::new(Some(&scopes));
-                    return GcDestr::new(FnOp::Multi {
+                    return GcDestr::new(FnOpRepr::Multi {
                         block: block
                             .stmts
                             .iter()
@@ -153,23 +160,23 @@ impl JsEngine {
                             .collect(),
                     });
                 }
-                Stmt::Empty(_stmt) => return GcDestr::new(FnOp::Nop {}),
+                Stmt::Empty(_stmt) => return GcDestr::new(FnOpRepr::Nop {}),
                 Stmt::Debugger(_stmt) => {
                     println!("Note: skipping debugger statement");
-                    return GcDestr::new(FnOp::Nop {});
+                    return GcDestr::new(FnOpRepr::Nop {});
                 }
                 Stmt::With(_with_stmt) => {
                     println!("Note: skipping with statement");
-                    return GcDestr::new(FnOp::Nop {});
+                    return GcDestr::new(FnOpRepr::Nop {});
                 }
                 Stmt::Return(ret_stmt) => {
                     if let Some(ret_stmt) = &ret_stmt.arg {
-                        return GcDestr::new(FnOp::Return {
+                        return GcDestr::new(FnOpRepr::Return {
                             what: Box::new(this.ingest_expression(scopes.clone())(ret_stmt)),
                         });
                     } else {
-                        return GcDestr::new(FnOp::Return {
-                            what: Box::from(GcDestr::new(FnOp::LoadStatic {
+                        return GcDestr::new(FnOpRepr::Return {
+                            what: Box::from(GcDestr::new(FnOpRepr::LoadStatic {
                                 value: JsValue::Undefined,
                             })),
                         });
@@ -177,43 +184,43 @@ impl JsEngine {
                 }
                 Stmt::Labeled(_lbl) => {
                     println!("Note: label not supported");
-                    return GcDestr::new(FnOp::Nop {});
+                    return GcDestr::new(FnOpRepr::Nop {});
                 }
                 Stmt::Break(_break_stmt) => {
                     println!("Note: break not supported");
-                    return GcDestr::new(FnOp::Nop {});
+                    return GcDestr::new(FnOpRepr::Nop {});
                 }
                 Stmt::Continue(_) => {
                     println!("Note: continue not supported");
-                    return GcDestr::new(FnOp::Nop {});
+                    return GcDestr::new(FnOpRepr::Nop {});
                 }
                 Stmt::If(if_stmt) => {
-                    return GcDestr::new(FnOp::IfElse {
+                    return GcDestr::new(FnOpRepr::IfElse {
                         condition: Box::new(this.ingest_expression(scopes.clone())(&if_stmt.test)),
                         if_block: Box::new(this.ingest_statement(scopes.clone())(&if_stmt.cons)),
                         else_block: Box::new(
                             (&if_stmt.alt)
                                 .as_ref()
                                 .map(|stmt| this.ingest_statement(scopes.clone())(&stmt))
-                                .unwrap_or(GcDestr::new(FnOp::Nop {})),
+                                .unwrap_or(GcDestr::new(FnOpRepr::Nop {})),
                         ),
                     })
                 }
                 Stmt::Switch(_) => {
                     println!("Note: switch not supported");
-                    return GcDestr::new(FnOp::Nop {});
+                    return GcDestr::new(FnOpRepr::Nop {});
                 }
                 Stmt::Throw(throw_stmt) => {
-                    return GcDestr::new(FnOp::Throw {
+                    return GcDestr::new(FnOpRepr::Throw {
                         what: Box::new(this.ingest_expression(scopes.clone())(&throw_stmt.arg)),
                     })
                 }
                 Stmt::Try(_) => {
                     println!("Note: try not supported");
-                    return GcDestr::new(FnOp::Nop {});
+                    return GcDestr::new(FnOpRepr::Nop {});
                 }
                 Stmt::While(while_stmt) => {
-                    return GcDestr::new(FnOp::While {
+                    return GcDestr::new(FnOpRepr::While {
                         condition: Box::new(this.ingest_expression(scopes.clone())(
                             &while_stmt.test,
                         )),
@@ -222,10 +229,10 @@ impl JsEngine {
                 }
                 Stmt::DoWhile(_) => {
                     println!("Note: do while not supported");
-                    return GcDestr::new(FnOp::Nop {});
+                    return GcDestr::new(FnOpRepr::Nop {});
                 }
                 Stmt::For(for_stmt) => {
-                    return GcDestr::new(FnOp::For {
+                    return GcDestr::new(FnOpRepr::For {
                         initial: /*Box::new(for_stmt.init.map(|var_or_expr| {
                             match var_or_expr {
                                 VarDeclOrExpr::VarDecl(var_decl) => {}
@@ -248,17 +255,17 @@ impl JsEngine {
 
     fn ingest_var_decl(
         &self,
-        scopes: Rc<RefCell<ScopeLookup>>,
-    ) -> Box<impl Fn(&VarDecl) -> GcDestr<FnOp>> {
+        scopes: Rc<GcCell<ScopeLookup>>,
+    ) -> Box<impl Fn(&VarDecl) -> GcDestr<FnOpRepr>> {
         return Box::new(move |decl: &VarDecl| {
-            return GcDestr::new(FnOp::Multi {
+            return GcDestr::new(FnOpRepr::Multi {
                 block: decl
                     .decls
                     .iter()
                     .map(|decl_single| {
-                        scopes.borrow_mut().insert_here(Rc::new(unimplemented!()));
+                        GcCell::borrow_mut(&scopes).insert_here(Rc::new(unimplemented!()));
                         let init = ScopeLookup::insert_here(
-                            &mut RefCell::borrow_mut(&scopes),
+                            &mut GcCell::borrow_mut(&scopes),
                             Rc::new(unimplemented!()),
                         );
                         return unimplemented!();
@@ -270,20 +277,41 @@ impl JsEngine {
 
     fn ingest_assignment(
         &'a self,
-        scopes: Rc<RefCell<ScopeLookup>>,
-    ) -> Box<impl Fn(&'a Pat, GcDestr<FnOp>) -> GcDestr<FnOp>> {
-        return Box::new(move |pat: &Pat, source| {
+        scopes: Rc<GcCell<ScopeLookup>>,
+    ) -> Box<impl Fn(&'a Pat, GcDestr<FnOpRepr>, bool) -> GcDestr<FnOpRepr>> {
+        // TODO dup code
+        let scopes_copy = scopes.clone();
+        let prop_name = move |prop: &PropName| {
+            return match &prop {
+                PropName::Ident(ident) => u_literal(u_string(ident.sym.to_string().as_str())),
+                PropName::Str(sym) => u_literal(u_string(sym.value.to_string().as_str())),
+                PropName::Num(n) => u_literal(u_number(n.value)),
+                PropName::Computed(comp) => {
+                    self.ingest_expression(scopes.clone())(comp.expr.as_ref())
+                }
+                PropName::BigInt(big_int) => u_literal(u_number(
+                    format!("{:o}", big_int.value)
+                        .parse()
+                        .expect("bigint unimplemented!"),
+                )),
+            };
+        };
+        let scopes = scopes_copy;
+        return Box::new(move |pat: &Pat, source, declare| {
             match pat {
                 Pat::Ident(ident) => {
-                    let to = scopes
-                        .borrow_mut()
+                    let to = GcCell::borrow_mut(&scopes)
                         .get(&Rc::new(ident.sym.to_string()))
                         .unwrap_or_else(|| {
-                            scopes
-                                .borrow_mut()
-                                .insert_top(Rc::new(ident.sym.to_string()))
+                            if declare {
+                                GcCell::borrow_mut(&scopes)
+                                    .insert_top(Rc::new(ident.sym.to_string()))
+                            } else {
+                                GcCell::borrow_mut(&scopes)
+                                    .insert_here(Rc::new(ident.sym.to_string()))
+                            }
                         });
-                    return GcDestr::new(FnOp::Assign {
+                    return GcDestr::new(FnOpRepr::Assign {
                         target: to,
                         what: Box::new(source),
                     });
@@ -293,15 +321,13 @@ impl JsEngine {
                         source,
                         u_deref(u_load_global("Symbol"), u_literal(u_string("iterator"))),
                     );
-                    let array = u_array();
-                    let (init1, it_provider) = u_reusable(iterator);
-                    let (init2, array_push_provider) = u_reusable(u_deref(
+                    let array = u_array_e();
+                    let mut it_provider = u_cached(iterator);
+                    let mut array_push_provider = u_cached(u_deref(
                         u_literal(array.clone()),
                         u_literal(u_string("push")),
                     ));
                     let mut result = Vec::new();
-                    result.push(init1);
-                    result.push(init2);
                     for x in &arr.elems {
                         if let Some(p) = x.as_ref() {
                             if let Pat::Rest(rest) = p {
@@ -309,7 +335,7 @@ impl JsEngine {
                                 let v2 = JsVar::new(Rc::new("#temp#".into()));
                                 v.set(JsValue::Boolean(true));
                                 result.push(u_while(
-                                    u_read_var(v),
+                                    u_read_var(v.clone()),
                                     u_block(vec![
                                         u_write_var(v2.clone(), it_provider()),
                                         u_if_else(
@@ -323,63 +349,60 @@ impl JsEngine {
                                             ),
                                             u_call(
                                                 array_push_provider(),
-                                                vec![u_deref(
+                                                u_array(vec![u_deref(
                                                     u_read_var(v2.clone()),
                                                     u_literal(u_string("value")),
-                                                )],
+                                                )]),
                                             ),
                                         ),
                                     ]),
                                 ));
                                 result.push(self.ingest_assignment(scopes.clone())(
                                     &rest.arg,
-                                    u_literal(array),
+                                    u_literal(array.clone()),
+                                    declare,
                                 ));
                                 break;
                             }
                             result.push(self.ingest_assignment(scopes.clone())(
                                 p,
                                 u_call_simple(u_deref(it_provider(), u_literal(u_string("next")))),
+                                declare,
                             ));
                         }
                     }
-                    return GcDestr::new(FnOp::Multi { block: result });
+                    return GcDestr::new(FnOpRepr::Multi { block: result });
                 }
                 Pat::Rest(_) => {
                     unreachable!("We SHOULD have handled this in the code above?!")
                 }
                 Pat::Object(obj) => {
                     let mut result = Vec::new();
-                    let (init, target) = u_reusable(source);
-                    result.push(init);
+                    let mut target = u_cached(source);
                     for pat_prop in &obj.props {
                         match pat_prop {
                             ObjectPatProp::KeyValue(key_value) => {
                                 // TODO is to_string ok?
                                 result.push(self.ingest_assignment(scopes.clone())(
                                     &key_value.value,
-                                    u_deref(
-                                        target(),
-                                        u_literal(u_string(key_value.key.to_string().as_str())),
-                                    ),
+                                    u_deref(target(), prop_name(&key_value.key)),
+                                    false,
                                 ))
                             }
                             ObjectPatProp::Assign(assign) => {
                                 if let Some(v) = &assign.value {
                                     result.push(u_write_var(
-                                        scopes
-                                            .borrow_mut()
-                                            .get_or_global(Rc::new(assign.key.to_string())),
+                                        GcCell::borrow_mut(&scopes)
+                                            .get_or_global(Rc::new(assign.key.sym.to_string())),
                                         self.ingest_expression(scopes.clone())(v),
                                     ));
                                 } else {
                                     result.push(u_write_var(
-                                        scopes
-                                            .borrow_mut()
-                                            .get_or_global(Rc::new(assign.key.to_string())),
+                                        GcCell::borrow_mut(&scopes)
+                                            .get_or_global(Rc::new(assign.key.sym.to_string())),
                                         u_deref(
-                                            source.clone(),
-                                            u_literal(u_string(&assign.key.to_string())),
+                                            target(),
+                                            u_literal(u_string(&assign.key.sym.to_string())),
                                         ),
                                     ))
                                 }
@@ -394,6 +417,7 @@ impl JsEngine {
                     return self.ingest_assignment(scopes.clone())(
                         &assign.left,
                         self.ingest_expression(scopes.clone())(&assign.right),
+                        false,
                     );
                 }
                 Pat::Invalid(invalid) => {
@@ -407,24 +431,42 @@ impl JsEngine {
         });
     }
 
-    fn ingest_expression(
+    fn ingest_expression<'a>(
         &'a self,
-        scopes: Rc<RefCell<ScopeLookup>>,
-    ) -> Box<impl Fn(&'a Expr) -> GcDestr<FnOp>> {
+        scopes: Rc<GcCell<ScopeLookup>>,
+    ) -> Box<impl Fn(&'a Expr) -> GcDestr<FnOpRepr>> {
+        let scopes_copy = scopes.clone();
         return Box::new(move |expr: &'a Expr| {
+            let prop_name = |prop: &'a PropName| {
+                return match prop {
+                    PropName::Ident(ident) => u_literal(u_string(ident.sym.to_string().as_str())),
+                    PropName::Str(sym) => u_literal(u_string(sym.value.to_string().as_str())),
+                    PropName::Num(n) => u_literal(u_number(n.value)),
+                    PropName::Computed(comp) => {
+                        self.ingest_expression(scopes.clone())(comp.expr.as_ref())
+                    }
+                    PropName::BigInt(big_int) => u_literal(u_number(
+                        format!("{:o}", big_int.value)
+                            .parse()
+                            .expect("bigint unimplemented!"),
+                    )),
+                };
+            };
+            let scopes = scopes_copy.clone();
+
             match &expr {
                 Expr::This(_) => {
                     return u_this();
                 }
                 Expr::Array(arr_lit) => {
                     let arr = u_array_e();
-                    let push =
+                    let mut push =
                         u_cached(u_deref(u_literal(arr.clone()), u_literal(u_string("push"))));
                     let mut ret = Vec::new();
-                    for exp in arr_lit.elems {
+                    for exp in &arr_lit.elems {
                         if let Some(exp) = exp {
                             if let Some(_spread) = exp.spread {
-                                let it = u_cached(u_deref(
+                                let mut it = u_cached(u_deref(
                                     self.ingest_expression(scopes.clone())(&exp.expr),
                                     u_deref(
                                         u_load_global("Symbol"),
@@ -466,26 +508,7 @@ impl JsEngine {
                 Expr::Object(lit) => {
                     let obj = u_obj();
                     let mut ret = Vec::new();
-                    for prop_or_spread in lit.props {
-                        let prop_name = |prop: &PropName| {
-                            return match prop {
-                                PropName::Ident(ident) => {
-                                    u_literal(u_string(ident.sym.to_string().as_str()))
-                                }
-                                PropName::Str(sym) => {
-                                    u_literal(u_string(sym.value.to_string().as_str()))
-                                }
-                                PropName::Num(n) => u_literal(u_number(n.value)),
-                                PropName::Computed(comp) => {
-                                    self.ingest_expression(scopes.clone())(comp.expr.as_ref())
-                                }
-                                PropName::BigInt(big_int) => u_literal(u_number(
-                                    format!("{:o}", big_int.value)
-                                        .parse()
-                                        .expect("bigint unimplemented!"),
-                                )),
-                            };
-                        };
+                    for prop_or_spread in &lit.props {
                         match prop_or_spread {
                             PropOrSpread::Spread(spread) => {}
                             PropOrSpread::Prop(prop) => match Box::deref(&prop) {
@@ -495,7 +518,8 @@ impl JsEngine {
                                         u_literal(obj.clone()),
                                         u_literal(u_string(name.as_str())),
                                         u_read_var(
-                                            scopes.borrow_mut().get_or_global(Rc::new(name)),
+                                            GcCell::borrow_mut(&scopes)
+                                                .get_or_global(Rc::new(name)),
                                         ),
                                     ))
                                 }
@@ -512,9 +536,19 @@ impl JsEngine {
                                         self.ingest_expression(scopes.clone())(&assign.value),
                                     ))
                                 }
-                                Prop::Getter(_) => {}
-                                Prop::Setter(_) => {}
-                                Prop::Method(_) => {}
+                                Prop::Getter(_getter) => {
+                                    unimplemented!("getters are not implemented yet")
+                                }
+                                Prop::Setter(_setter) => {
+                                    unimplemented!("setters are not implemented yet")
+                                }
+                                Prop::Method(method) => {
+                                    ret.push(u_assign(
+                                        u_literal(obj.clone()),
+                                        prop_name(&method.key),
+                                        self.ingest_function(scopes.clone())(&method.function),
+                                    ));
+                                }
                             },
                         }
                     }
@@ -536,14 +570,13 @@ impl JsEngine {
                             u_deref(u_load_global("Symbol"), u_literal(u_string("iterator"))),
                         );
                         let array = u_array_e();
-                        let it_provider = u_cached(iterator);
-                        let (init2, array_push_provider) = u_reusable(u_deref(
+                        let mut it_provider = u_cached(iterator);
+                        let mut array_push_provider = u_cached(u_deref(
                             u_literal(array.clone()),
                             u_literal(u_string("push")),
                         ));
 
                         let mut ops = Vec::new();
-                        ops.push(init2);
 
                         for (i, arg_or_spread) in (&call.args).iter().enumerate() {
                             if let Some(_spread) = &arg_or_spread.spread {
@@ -570,7 +603,7 @@ impl JsEngine {
                             self.ingest_expression(scopes.clone())(&expr),
                             u_literal(array),
                         ));
-                        return GcDestr::new(FnOp::Multi { block: ops });
+                        return GcDestr::new(FnOpRepr::Multi { block: ops });
                     }
                 },
                 Expr::New(n) => {
@@ -585,7 +618,7 @@ impl JsEngine {
                 }
                 Expr::Ident(ident) => {
                     let name: String = ident.sym.to_string();
-                    return u_read_var(scopes.borrow_mut().get_or_global(Rc::new(name)));
+                    return u_read_var(GcCell::borrow_mut(&scopes).get_or_global(Rc::new(name)));
                 }
                 Expr::Lit(lit) => match lit {
                     Lit::Str(s) => return u_literal(u_string(&s.value.to_string())),
@@ -608,28 +641,168 @@ impl JsEngine {
                         unimplemented!()
                     }
                 },
-                Expr::Tpl(_) => {}
-                Expr::TaggedTpl(_) => {}
-                Expr::Arrow(arrow_expr) => {}
-                Expr::Class(_) => {}
-                Expr::Yield(_) => {}
-                Expr::MetaProp(_) => {}
-                Expr::Await(_) => {}
-                Expr::Paren(_) => {}
-                Expr::JSXMember(_) => {}
-                Expr::JSXNamespacedName(_) => {}
-                Expr::JSXEmpty(_) => {}
-                Expr::JSXElement(_) => {}
-                Expr::JSXFragment(_) => {}
-                Expr::TsTypeAssertion(_) => {}
-                Expr::TsConstAssertion(_) => {}
-                Expr::TsNonNull(_) => {}
-                Expr::TsTypeCast(_) => {}
-                Expr::TsAs(_) => {}
-                Expr::PrivateName(_) => {}
-                Expr::OptChain(_) => {}
-                Expr::Invalid(_) => {}
+                Expr::Tpl(_) => {
+                    unimplemented!("no jsx")
+                }
+                Expr::TaggedTpl(_) => {
+                    unimplemented!("no jsx")
+                }
+                Expr::Arrow(arrow_expr) => {
+                    // todo dup code
+
+                    // TODO |   uh boy... can't wait to implement the proper engine parts...
+                    // TODO |   this is about as safe & reasonable as cuddling a lion:
+                    // TODO |   Can go well, but won't always and when it does not the owner (me)
+                    // TODO |   has some explaining to do...
+                    let arrow_expr: &'static ArrowExpr = unsafe { std::mem::transmute(arrow_expr) };
+                    let self_: &'static mut Self = unsafe { std::mem::transmute(self) };
+
+                    return u_literal(
+                        JsObjectBuilder::new(None)
+                            .with_callable(JSCallable::Js {
+                                content: Rc::new("TODO".to_string()),
+                                // TODO capturing function by ref is not safe here - will be sorted out when we separate AST and engine state
+                                creator: Gc::from(JsFn::new(
+                                    (scopes.clone(),),
+                                    move |(scopes,), ret, args, this| {
+                                        let scopes = ScopeLookup::new(Some(&scopes));
+                                        let mut setup = Vec::new();
+                                        for (i, par) in arrow_expr.params.iter().enumerate() {
+                                            setup.push(self_.ingest_assignment(scopes.clone())(
+                                                &par,
+                                                u_deref(
+                                                    u_literal(args.clone()),
+                                                    u_literal(u_string(&i.to_string())),
+                                                ),
+                                                true,
+                                            ));
+                                        }
+
+                                        StackFrame {
+                                            vars: vec![], // TODO
+                                            remaining_ops: setup,
+                                            this,
+                                            ret_store: ret,
+                                        }
+                                    },
+                                )),
+                            })
+                            .build(),
+                    );
+                }
+                Expr::Class(_) => {
+                    unimplemented!("classes not implemented")
+                }
+                Expr::Yield(_) => {
+                    unimplemented!("generators not implemented")
+                }
+                Expr::MetaProp(_) => {
+                    unimplemented!("meta props not implemented")
+                }
+                Expr::Await(aw) => {
+                    // TODO we are not handling await yet
+                    return GcDestr::new(FnOpRepr::Await {
+                        what: Box::new(self.ingest_expression(scopes.clone())(&aw.arg)),
+                    });
+                }
+                Expr::Paren(par) => return self.ingest_expression(scopes.clone())(&par.expr),
+                Expr::JSXMember(_) => {
+                    unimplemented!()
+                }
+                Expr::JSXNamespacedName(_) => {
+                    unimplemented!()
+                }
+                Expr::JSXEmpty(_) => {
+                    unimplemented!()
+                }
+                Expr::JSXElement(_) => {
+                    unimplemented!()
+                }
+                Expr::JSXFragment(_) => {
+                    unimplemented!()
+                }
+                Expr::TsTypeAssertion(_) => {
+                    unimplemented!()
+                }
+                Expr::TsConstAssertion(_) => {
+                    unimplemented!()
+                }
+                Expr::TsNonNull(_) => {
+                    unimplemented!()
+                }
+                Expr::TsTypeCast(_) => {
+                    unimplemented!()
+                }
+                Expr::TsAs(_) => {
+                    unimplemented!()
+                }
+                Expr::PrivateName(_) => {
+                    unimplemented!()
+                }
+                Expr::OptChain(_) => {
+                    unimplemented!("optional chaining not supported yet")
+                }
+                Expr::Invalid(_) => {
+                    unimplemented!()
+                }
             }
+            unimplemented!()
+        });
+    }
+
+    fn ingest_function(
+        &'a self,
+        scopes: Rc<GcCell<ScopeLookup>>,
+    ) -> Box<impl FnMut(&'a Function) -> GcDestr<FnOpRepr>> {
+        return Box::new(move |function: &Function| {
+            if !function.decorators.is_empty() {
+                panic!("decorators (@) unimplemented!")
+            }
+
+            // TODO |   uh boy... can't wait to implement the proper engine parts...
+            // TODO |   this is about as safe & reasonable as cuddling a lion:
+            // TODO |   Can go well, but won't always and when it does not the owner (me)
+            // TODO |   has some explaining to do...
+            let function: &'static Function = unsafe { std::mem::transmute(function) };
+            let mut self_: &'static mut Self = unsafe { std::mem::transmute(self) };
+
+            u_literal(
+                JsObjectBuilder::new(None)
+                    .with_callable(JSCallable::Js {
+                        content: Rc::new("TODO".to_string()),
+                        // TODO capturing function by ref is not safe here - will be sorted out when we separate AST and engine state
+                        creator: Gc::from(JsFn::new(
+                            (scopes.clone(),),
+                            move |(scopes,), ret, args, this| {
+                                let scopes = ScopeLookup::new(Some(&scopes));
+                                let mut setup = Vec::new();
+                                for (i, par) in function.params.iter().enumerate() {
+                                    setup.push(self_.ingest_assignment(scopes.clone())(
+                                        &par.pat,
+                                        u_deref(
+                                            u_literal(args.clone()),
+                                            u_literal(u_string(&i.to_string())),
+                                        ),
+                                        true,
+                                    ));
+                                }
+                                if let Some(body) = &function.body {
+                                    for stmt in &body.stmts {
+                                        setup.push(self_.ingest_statement(scopes.clone())(stmt))
+                                    }
+                                }
+                                StackFrame {
+                                    vars: vec![], // TODO
+                                    remaining_ops: setup,
+                                    this,
+                                    ret_store: ret,
+                                }
+                            },
+                        )),
+                    })
+                    .build(),
+            );
+
             unimplemented!()
         });
     }

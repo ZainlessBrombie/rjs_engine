@@ -22,6 +22,7 @@ Uses swc parser.
 ## Todos
 - [ ] (Almost there) AST read and translated into code
 - [ ] (Getting there) complete engine
+- [ ] errors show line and piece of code
 - [ ] bash script to run V8 js - tests
 - [ ] passes (most) of those tests
 - [ ] refactor towards own, safe, more usable GC.
@@ -29,8 +30,13 @@ Uses swc parser.
 - [ ] remove-refactor then obsolete GcDestr
 - [ ] separate AST and in-engine representation
 - [ ] extract god-files into smaller modules
+- [ ] Debugging
+- [ ] Tracelog/Replay: Optionally save and replay the entire execution for debugging
+      things that havent happened locally. Optionally controllable from js via a binding/module
+- [ ] Entire engine state is serializable. Ongoing native calls will throw exception. Possible warning ahead of time.
 - [ ] documentation
 - [ ] make it known?
+- helpful tips when js file, sort of like in rust compiler - only at runtime
 
 ##Non-Goals
 - V8-like performance. Not *yet* planned.

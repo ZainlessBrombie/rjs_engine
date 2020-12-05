@@ -9,9 +9,11 @@
 }*/
 
 use crate::js::data::gc_util::GcDestr;
-use crate::js::data::js_execution::{FnOp, JsVar, StackFrame};
-use crate::js::data::util::{u_call, u_call_simple, u_literal, JsObjectBuilder};
-use gc::{Finalize, Gc, GcCell, Trace};
+use crate::js::data::js_execution::{FnOpRepr, JsVar, StackFrame};
+use crate::js::data::util::{
+    s_pool, u_call, u_call_simple, u_literal, u_undefined, JsObjectBuilder,
+};
+use gc::{BorrowMutError, Finalize, Gc, GcCell, GcCellRefMut, Trace};
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -63,7 +65,7 @@ pub struct JsFn {
         Box<
             dyn FnMut(
                 /* ret */ JsVar,
-                /* args */ Vec<JsValue>,
+                /* args */ JsValue,
                 /* this */ JsValue,
             ) -> StackFrame,
         >,
@@ -72,14 +74,14 @@ pub struct JsFn {
 }
 
 impl JsFn {
-    pub fn call(&self, ret: JsVar, args: Vec<JsValue>, this: JsValue) -> StackFrame {
+    pub fn call(&self, ret: JsVar, args: JsValue, this: JsValue) -> StackFrame {
         (self.builder.borrow_mut())(ret, args, this)
     }
 
     // todo for safety this should take an fn, not an Fn
     pub fn new<
         T: Trace + 'static,
-        F: Fn(&mut T, JsVar, Vec<JsValue>, JsValue) -> StackFrame + 'static,
+        F: Fn(&mut T, JsVar, JsValue, JsValue) -> StackFrame + 'static,
     >(
         data: T,
         f: F,
@@ -98,13 +100,14 @@ impl JsFn {
         JsFn::new(f, |d, var, args, this| StackFrame {
             vars: vec![],
             remaining_ops: vec![u_call_simple(u_literal(d.clone()))],
+            this, // TODO?
             ret_store: var,
         })
     }
 
     pub fn simple_call<
         T: Trace + 'static,
-        F: Fn(&T, Vec<JsValue>) -> Result<JsValue, JsValue> + 'static,
+        F: Fn(&T, JsValue) -> Result<JsValue, JsValue> + 'static,
     >(
         data: T,
         f: F,
@@ -112,13 +115,14 @@ impl JsFn {
         return JsFn::new(data, move |data, var, args, this| StackFrame {
             vars: vec![],
             remaining_ops: vec![GcDestr::new(match f(data, args) {
-                Ok(value) => FnOp::Return {
-                    what: Box::new(GcDestr::new(FnOp::LoadStatic { value })),
+                Ok(value) => FnOpRepr::Return {
+                    what: Box::new(GcDestr::new(FnOpRepr::LoadStatic { value })),
                 },
-                Err(err) => FnOp::Throw {
-                    what: Box::from(GcDestr::new(FnOp::LoadStatic { value: err })),
+                Err(err) => FnOpRepr::Throw {
+                    what: Box::from(GcDestr::new(FnOpRepr::LoadStatic { value: err })),
                 },
             })],
+            this,
             ret_store: var,
         });
     }
@@ -247,8 +251,7 @@ pub struct JsObj {
 
 impl JsObj {
     pub fn get_prop(&self, k: Rc<String>) -> JsValue {
-        self
-            .content
+        self.content
             .get(&k)
             .map(|prop| &prop.value)
             .unwrap_or(&JsValue::Undefined)
@@ -300,6 +303,7 @@ impl JsValue {
 
     /// Returns the safe, system internal representation of the string
     /// like used in templating. Safe means no execution. Strings are returned literally.
+    /// Very long arrays with a lot of empties may produce a lot of commas
     pub fn to_system_string(&self) -> Rc<String> {
         match self {
             JsValue::Undefined => "undefined".into(),
@@ -307,7 +311,39 @@ impl JsValue {
             JsValue::Number(n) => n.to_string(),
             JsValue::Boolean(b) => b.to_string(),
             JsValue::String(s) => s.to_string(),
-            JsValue::Object { .. } => "[object Object]".into(),
+            JsValue::Object(obj) => {
+                let ref_mut = GcCell::try_borrow_mut(&obj);
+                let ref_mut = match ref_mut {
+                    Ok(ok) => ok,
+                    Err(err) => return Rc::new("".into()), // circular
+                };
+                if ref_mut.is_array {
+                    let mut ret = Vec::new();
+                    let len = ref_mut
+                        .content
+                        .get(&s_pool("length"))
+                        .map(|prop| prop.value.clone())
+                        .unwrap_or(u_undefined());
+                    let len = match len {
+                        JsValue::Number(n) => n,
+                        _ => 0.0,
+                    };
+                    // TODO this may block the server
+                    for i in 0..(len.floor() as usize/* TODO this can panic */) {
+                        ret.push(
+                            ref_mut
+                                .content
+                                .get(&Rc::new(i.to_string()))
+                                .map(|prop| prop.value.to_system_string())
+                                .unwrap_or(Rc::new("".into()))
+                                .as_str()
+                                .to_string(),
+                        )
+                    }
+                    return Rc::new(ret.join(","));
+                }
+                "[object Object]".into()
+            }
         }
         .into()
     }
