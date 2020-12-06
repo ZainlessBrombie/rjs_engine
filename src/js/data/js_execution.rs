@@ -227,17 +227,18 @@ impl AsyncStack {
             }
 
             if let Some(last) = access.stack.stack.pop() {
-                let stack_op = match last {
-                    StackElement::Op(op) => op,
+                let stack_op = match &last {
+                    // TODO by value
+                    StackElement::Op(op) => op.clone(),
                     _ => {
                         panic!("Corrupt stack (1)")
                     }
                 };
                 let action = FnOp::run(stack_op, &mut access);
                 match action {
-                    FnOpAction::Pop(pop) => self.stack.truncate(pop),
-                    FnOpAction::Push(mut push) => self.stack.append(&mut push),
-                    FnOpAction::One(one) => self.stack.push(one),
+                    FnOpAction::Pop(pop) => access.stack.stack.truncate(pop),
+                    FnOpAction::Push(mut push) => access.stack.stack.append(&mut push),
+                    FnOpAction::One(one) => access.stack.stack.push(one),
                     FnOpAction::LoadGlobal { name, target } => {
                         if name.as_str() == "console" {
                             target.set(
@@ -256,13 +257,13 @@ impl AsyncStack {
                         }
                     }
                     FnOpAction::LabelWalkback { id } => {
-                        let value = self.stack.pop().expect("corrupt stack (2)");
-                        while let Some(el) = self.stack.pop() {
+                        let value = access.stack.stack.pop().expect("corrupt stack (2)");
+                        while let Some(el) = access.stack.stack.pop() {
                             match el {
                                 StackElement::Value(_) => {}
                                 StackElement::Label(label) => {
                                     if label == id {
-                                        if label == self.method_label {}
+                                        if label == access.stack.method_label {}
                                         break;
                                     }
                                 }
@@ -270,30 +271,36 @@ impl AsyncStack {
                                 StackElement::HeapVar(_) => {}
                             }
                         }
-                        let temp = self.stack.pop().expect("corrupt stack (5)");
-                        self.stack.push(value);
-                        self.stack.push(temp);
+                        let temp = access.stack.stack.pop().expect("corrupt stack (5)");
+                        access.stack.stack.push(value);
+                        access.stack.stack.push(temp);
                     }
                     FnOpAction::Nop => {}
                     FnOpAction::Two(e1, e2) => {
-                        self.stack.push(e2);
-                        self.stack.push(e1);
+                        access.stack.stack.push(e2);
+                        access.stack.stack.push(e1);
                     }
                     FnOpAction::Three(e1, e2, e3) => {
-                        self.stack.push(e3);
-                        self.stack.push(e2);
-                        self.stack.push(e1);
+                        access.stack.stack.push(e3);
+                        access.stack.stack.push(e2);
+                        access.stack.stack.push(e1);
                     }
                     FnOpAction::Four(e1, e2, e3, e4) => {
-                        self.stack.push(e4);
-                        self.stack.push(e3);
-                        self.stack.push(e2);
-                        self.stack.push(e1);
+                        access.stack.stack.push(e4);
+                        access.stack.stack.push(e3);
+                        access.stack.stack.push(e2);
+                        access.stack.stack.push(e1);
                     }
                     FnOpAction::CopyStack(n) => {
-                        self.stack.push(StackElement::Op(FnOp::Repeat { n }));
-                        self.stack.extend_from_slice(
-                            &self.stack[(self.stack.len() - n - 1)..self.stack.len()],
+                        access
+                            .stack
+                            .stack
+                            .push(StackElement::Op(FnOp::Repeat { n }));
+                        access.stack.stack.append(
+                            &mut Vec::from(
+                                &access.stack.stack
+                                    [(access.stack.stack.len() - n - 1)..access.stack.stack.len()],
+                            ), // TODO
                         );
                     }
                     FnOpAction::Await { target, what } => {
@@ -447,7 +454,7 @@ impl FnOpRepr {
         store_at: JsVar,
         into: &mut Vec<StackElement>,
     ) {
-        let to_var = |var_alloc: &VarAlloc| match var_alloc {
+        let to_var = |stack: &mut StackAccess, var_alloc: &VarAlloc| match var_alloc {
             VarAlloc::CapturedAt { name, from, target } => {
                 stack.read_stack(*target).assume_capture()
             }
@@ -462,14 +469,14 @@ impl FnOpRepr {
                 }));
             }
             FnOpRepr::Assign { what, target } => {
-                FnOpRepr::call_stack(stack, what.deref(), to_var(target), into);
+                FnOpRepr::call_stack(stack, what.deref(), to_var(stack, target), into);
             }
             FnOpRepr::LoadStatic { value } => into.push(StackElement::Op(FnOp::LoadStatic {
                 value: value.clone(),
                 target: store_at.clone(),
             })),
             FnOpRepr::ReadVar { which } => into.push(StackElement::Op(FnOp::Assign {
-                source: to_var(which),
+                source: to_var(stack, which),
                 target: store_at.clone(),
             })),
             FnOpRepr::CallFunction {
@@ -482,7 +489,7 @@ impl FnOpRepr {
                 let ret = stack.make_local();
 
                 into.push(StackElement::Op(FnOp::CallFunction {
-                    this: to_var(this),
+                    this: to_var(stack, this),
                     func: on_v,
                     args: arg_v,
                     target: ret.clone(),
@@ -744,7 +751,7 @@ impl FnOpRepr {
             })),
             FnOpRepr::InstantiateFunction { vars, code } => {
                 into.push(StackElement::Op(FnOp::CreateFunction {
-                    captures: Rc::new(vars.iter().map(|va| to_var(va)).collect()), // TODO straight to stack?
+                    captures: Rc::new(vars.iter().map(|va| to_var(stack, va)).collect()), // TODO straight to stack?
                     code: code.clone(),
                     target: store_at,
                 }))
@@ -756,10 +763,10 @@ impl FnOpRepr {
                 call,
             } => {
                 into.push(StackElement::Op(FnOp::NativeCall {
-                    this: to_var(this),
+                    this: to_var(stack, this),
                     func: call.clone(),
-                    args: to_var(args),
-                    target: to_var(target),
+                    args: to_var(stack, args),
+                    target: to_var(stack, target),
                 }));
             }
         }
