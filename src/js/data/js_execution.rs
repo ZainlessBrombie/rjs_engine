@@ -1,4 +1,5 @@
 use crate::js::data::js_execution::FnOp::Throw;
+use crate::js::data::js_execution::VarAlloc::CapturedAt;
 use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsProperty, JsValue};
 use crate::js::data::util::{
     s_pool, u_array_e, u_block, u_bool, u_call, u_capture_deref, u_deref, u_function, u_if,
@@ -50,14 +51,14 @@ impl EngineState {
 
         loop {
             while consumed < ticks {
-                if let Some(cur) = self.tick_queue.rl_front_mut() {
+                if let Some(cur) = self.tick_queue.pop() {
                     let mut ref_mut = GcCell::borrow_mut(&cur);
                     let (result, cost) = ref_mut.run(ticks - consumed);
                     consumed += cost;
                     match result {
                         AsyncStackResult::Forget => {
                             std::mem::drop(ref_mut);
-                            self.tick_queue.rl_pop_front();
+                            self.tick_queue.pop();
                         }
                         AsyncStackResult::Keep => {}
                     }
@@ -111,7 +112,7 @@ Stack layout:
 -1) return-label
  0) this
  1) args-array
- 2..n) local variables
+ 2..n) local variables, captures
  n..m) code, local variables
 */
 impl<'a> StackAccess<'a> {
@@ -233,12 +234,13 @@ impl AsyncStack {
                         self.stack.push(e1);
                     }
                     FnOpAction::CopyStack(n) => {
+                        self.stack.push(StackElement::Op(FnOp::Repeat { n }));
                         self.stack.extend_from_slice(
-                            &self.stack[(self.stack.len() - n)..self.stack.len()],
+                            &self.stack[(self.stack.len() - n - 1)..self.stack.len()],
                         );
                     }
                     FnOpAction::Await { target, what } => {
-                        return (AsyncStackResult::Forget, consumed)
+                        return (AsyncStackResult::Forget, consumed); // TODO await
                     }
                 };
                 consumed += 1;
@@ -267,9 +269,16 @@ pub fn build_demo_fn() -> JsValue {
 
 #[derive(Clone, Trace, Finalize)]
 pub enum VarAlloc {
-    CapturedAt(usize),
-    LocalAt(usize),
+    CapturedAt {
+        name: Rc<String>,
+        from: Box::new(VarAlloc),
+        target: usize,
+    },
+    LocalAt(Rc<String>, usize),
+    Static(Rc<String>, JsVar),
 }
+
+impl VarAlloc {}
 
 #[derive(Clone, Trace, Finalize)]
 pub enum FnOpRepr {
@@ -386,8 +395,10 @@ impl FnOpRepr {
         into: &mut Vec<StackElement>,
     ) {
         let to_var = |var_alloc: &VarAlloc| match var_alloc {
-            VarAlloc::CapturedAt(pos) => stack.read_stack(*pos).assume_capture(),
-            VarAlloc::LocalAt(pos) => stack.local_at(*pos),
+            VarAlloc::CapturedAt { name, from, target } => {
+                stack.read_stack(*target).assume_capture()
+            }
+            VarAlloc::LocalAt(name, pos) => stack.local_at(*pos),
         };
         match op {
             FnOpRepr::LoadGlobal { name } => {
@@ -1100,22 +1111,22 @@ impl FnOp {
                 match (left.get(Some(&stack)), right.get(Some(&stack))) {
                     (JsValue::String(s1), val) => target.set(
                         Some(stack),
-                        JsValue::String(Rc::new(s1.into() + val.to_system_string())),
+                        JsValue::String(Rc::new(s1.to_string() + val.to_system_string().as_str())),
                     ),
                     (val, JsValue::String(s1)) => target.set(
                         Some(stack),
-                        JsValue::String(Rc::new(val.to_system_string().into() + s1)),
+                        JsValue::String(Rc::new(val.to_system_string().to_string() + s1.as_str())),
                     ),
                     (o @ JsValue::Object(_), val) => target.set(
                         Some(stack),
                         JsValue::String(Rc::new(
-                            o.to_system_string().into() + val.to_system_string(),
+                            o.to_system_string().to_string() + val.to_system_string().as_str(),
                         )),
                     ),
                     (val, o @ JsValue::Object(_)) => target.set(
                         Some(stack),
                         JsValue::String(Rc::new(
-                            val.to_system_string().into() + o.to_system_string(),
+                            val.to_system_string().to_string() + o.to_system_string().as_str(),
                         )),
                     ),
                     (v1, v2) => target.set(Some(stack), u_number(coerce(v1) + coerce(v2))),
@@ -1232,7 +1243,7 @@ impl StackElement {
     }
 }
 
-#[derive(Clone)]
+#[derive(Trace, Finalize, Clone)]
 pub enum JsVar {
     Stack {
         pos: usize,
@@ -1294,25 +1305,5 @@ impl JsVar {
                 .assume_val(),
             JsVar::Heap { value, .. } => return value.borrow_mut().clone(),
         }
-    }
-}
-
-impl Finalize for JsVar {}
-
-unsafe impl Trace for JsVar {
-    unsafe fn trace(&self) {
-        self.value.trace();
-    }
-
-    unsafe fn root(&self) {
-        self.value.root();
-    }
-
-    unsafe fn unroot(&self) {
-        self.value.unroot();
-    }
-
-    fn finalize_glue(&self) {
-        self.value.finalize_glue();
     }
 }
