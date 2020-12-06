@@ -1,14 +1,13 @@
-use crate::js::data::gc_util::GcDestr;
-use crate::js::data::js_execution::{FnOpRepr, FnOpResult, JsVar, StackFrame, VarAlloc};
-use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsObj, JsProperty, JsValue};
-use crate::js::data::EngineConstants::{ConstantStrings, EngineConstants};
+use crate::js::data::js_execution::{EngineQueuer, FnOpRepr, JsVar, VarAlloc};
+use crate::js::data::js_types::{Identity, JSCallable, JsObj, JsProperty, JsValue, JsFn};
+use crate::js::data::EngineConstants::ConstantStrings;
 use gc::{Gc, GcCell};
-use std::cell::RefCell;
+use std::borrow::BorrowMut;
+use std::cell::{Ref, RefCell, RefMut};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::rc::Rc;
-use crate::js::data::js_code::ScopeLookup;
 
 pub struct JsObjectBuilder<'a> {
     obj: JsObj,
@@ -102,55 +101,6 @@ impl<'a> JsObjectBuilder<'a> {
     }
 }
 
-pub fn u_load_global(name: &str) -> FnOpRepr {
-    return FnOpRepr::LoadGlobal {
-        name: Rc::new(name.to_string()),
-    };
-}
-
-pub fn u_read_var(var: VarAlloc) -> FnOpRepr {
-    return FnOpRepr::ReadVar { which: var };
-}
-
-pub fn u_return(ret: FnOpRepr) -> FnOpRepr {
-    FnOpRepr::Return {
-        what: Rc::from(ret),
-    }
-}
-
-pub fn u_write_var(var: VarAlloc, what: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::Assign {
-        target: var,
-        what: Rc::from(what),
-    };
-}
-
-pub fn u_literal(value: JsValue) -> FnOpRepr {
-    return FnOpRepr::LoadStatic { value };
-}
-
-pub fn u_obj() -> JsValue {
-    JsObjectBuilder::new(None).build()
-}
-
-pub fn u_this() -> FnOpRepr {
-    return FnOpRepr::LoadThis {};
-}
-
-pub fn u_plus_num(left: FnOpRepr, right: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::NumeralPlus {
-        left: Rc::new(left),
-        right: Rc::new(right),
-    };
-}
-
-pub fn u_plus(left: FnOpRepr, right: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::Plus {
-        left: Rc::new(left),
-        right: Rc::new(right),
-    };
-}
-
 pub fn u_null() -> JsValue {
     JsValue::Null
 }
@@ -175,155 +125,8 @@ pub fn u_true() -> JsValue {
     u_bool(true)
 }
 
-pub fn u_assign(
-    to: FnOpRepr,
-    key: FnOpRepr,
-    what: FnOpRepr,
-) -> FnOpRepr {
-    return FnOpRepr::AssignRef {
-        to: Rc::new(to),
-        key: Rc::new(key),
-        what: Rc::new(what),
-    };
-}
-
-pub fn u_if(cond: FnOpRepr, if_b: FnOpRepr) -> FnOpRepr {
-    u_if_else(cond, if_b, FnOpRepr::Nop {})
-}
-
-pub fn u_and(left: FnOpRepr, right: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::BoolAnd {
-        left: Rc::from(left),
-        right: Rc::from(right),
-    };
-}
-
-pub fn u_or(left: FnOpRepr, right: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::BoolOr {
-        left: Rc::from(left),
-        right: Rc::from(right),
-    };
-}
-
-pub fn u_strict_comp(left: FnOpRepr, right: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::StrictCompare {
-        left: Rc::new(left),
-        right: Rc::new(right),
-    };
-}
-
-pub fn u_fuzzy_comp(left: FnOpRepr, right: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::FuzzyCompare {
-        left: Rc::new(left),
-        right: Rc::new(right),
-    };
-}
-
-pub fn u_typeof(of: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::TypeOf {
-        of: Rc::new(of),
-    };
-}
-
-pub fn u_if_else(
-    cond: FnOpRepr,
-    if_b: FnOpRepr,
-    else_b: FnOpRepr,
-) -> FnOpRepr {
-    return FnOpRepr::IfElse {
-        condition: Rc::from(cond),
-        if_block: Rc::from(if_b),
-        else_block: Rc::from(else_b),
-    };
-}
-
-pub fn u_throw(what: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::Throw {
-        what: Rc::from(what),
-    };
-}
-
-pub fn u_not(of: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::BoolNot { of: Rc::new(of) };
-}
-
-pub fn u_while(condition: FnOpRepr, block: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::While {
-        condition: Rc::new(condition),
-        block: Rc::new(block),
-    };
-}
-
-pub fn u_array(mut values: Vec<FnOpRepr>) -> FnOpRepr {
-    let arr = JsObjectBuilder::new(None).with_being_array().build();
-    let mut ops = Vec::new();
-    for (i, v) in values.iter_mut().enumerate() {
-        ops.push(u_assign(
-            u_literal(arr.clone()),
-            u_literal(JsValue::Number(i as f64)),
-            v.clone(),
-        ))
-    }
-    ops.push(u_literal(arr.clone()));
-    u_block(ops)
-}
-
-pub fn u_array_e() -> FnOpRepr {
-    FnOpRepr::NewObject { is_array: true }}
-
-/// Returns (hasNext, value)
-pub fn u_it_next(scopes: &mut ScopeLookup, on: VarAlloc, it: FnOpRepr) -> (FnOpRepr, FnOpRepr) {
-    
-    let returned = u_cached(scopes, u_call_simple(on, it));
-    return (
-        u_deref(returned.1.clone(), u_literal(u_string("done"))),
-        u_deref(returned.1, u_literal(u_string("value"))),
-    );
-}
-
-pub fn u_cached(scopes: &mut ScopeLookup, what: FnOpRepr) -> (VarAlloc, FnOpRepr) {
-    let var = GcCell::borrow_mut(scopes)
-        .insert_here(Rc::new("".into()));
-    let temp = GcCell::borrow_mut(scopes)
-        .insert_here(Rc::new("".into()));
-    (temp, u_block(vec![
-        u_if(u_read_var(var.clone()), u_block(vec![
-            u_write_var(temp.clone(), what),
-            u_write_var(var, u_literal(u_bool(true)))
-        ])),
-        u_read_var(temp)
-    ]))
-}
-
-pub fn u_deref(from: FnOpRepr, key: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::Deref {
-        from: Rc::new(from),
-        key: Rc::new(key),
-    };
-}
-
 pub fn u_string(s: &str) -> JsValue {
     return JsValue::String(Rc::new(s.into()));
-}
-
-pub fn u_block(b: Vec<FnOpRepr>) -> FnOpRepr {
-    return FnOpRepr::Multi { block: b };
-}
-
-pub fn u_call_simple(this: VarAlloc, on: FnOpRepr) -> FnOpRepr {
-    u_call(
-        this,
-        on,
-        u_literal(JsObjectBuilder::new(None).with_being_array().build()),
-    )
-}
-
-pub fn u_call(this: VarAlloc, on: FnOpRepr, args: FnOpRepr) -> FnOpRepr {
-    return FnOpRepr::CallFunction {
-        this,
-        on: Rc::new(on),
-        arg_array: Rc::from(args)
-    };
 }
 
 thread_local! {
@@ -344,4 +147,415 @@ pub fn s_pool(s: &'static str) -> Rc<String> {
             }
         }
     })
+}
+
+type Scope = Rc<RefCell<ScopeLookup>>;
+
+type Sl = ScopeLookup;
+
+pub struct ScopeLookup {
+    cur: HashMap<Rc<String>, VarAlloc>,
+    prev: Option<Scope>,
+    local_counter: usize,
+    heap_break: bool,
+}
+
+impl ScopeLookup {
+    pub fn new() -> Scope {
+        Rc::new(RefCell::new(ScopeLookup {
+            cur: Default::default(),
+            prev: None,
+            local_counter: 2,
+            heap_break: false,
+        }))
+    }
+
+    pub fn child(this: Scope, heap_break: bool) -> Scope {
+        Rc::new(RefCell::new(ScopeLookup {
+            cur: Default::default(),
+            prev: Some(this.clone()),
+            local_counter: 2,
+            heap_break,
+        }))
+    }
+
+    pub fn get_captures(&self) -> Vec<VarAlloc> {
+        let mut ret = Vec::new();
+        for val in self.cur.values() {
+            if let VarAlloc::CapturedAt { .. } = val {
+                ret.push(val.clone())
+            }
+        }
+        return ret;
+    }
+
+    pub fn get(this: &Scope, name: &Rc<String>, heaped: bool) -> Option<VarAlloc> {
+        let mut ret = RefCell::borrow_mut(this)
+            .cur
+            .get(name)
+            .map(|r| {
+                if heaped {
+                    return VarAlloc::CapturedAt {
+                        name: name.clone(),
+                        from: Box::new(r.clone()),
+                        target: 0,
+                    };
+                }
+                r.clone()
+            })
+            .or_else(|| {
+                RefCell::borrow(this).prev.as_ref().map_or(None, |mut p| {
+                    if heaped {
+                        Sl::get(p, name, false).map(|source| {
+                            return VarAlloc::CapturedAt {
+                                name: name.clone(),
+                                from: Box::new(source),
+                                target: 0,
+                            };
+                        })
+                    } else {
+                        ScopeLookup::get(&this, &name, RefCell::borrow(this).heap_break)
+                        // TODO possibly incorrect
+                    }
+                })
+            });
+        if let Some(ret) = &mut ret {
+            if let VarAlloc::CapturedAt { target, .. } = ret {
+                let this = RefCell::borrow_mut(this);
+                this.local_counter += 1;
+                *target = this.local_counter - 1;
+            }
+        }
+        return ret;
+    }
+
+    pub fn insert_here(this: &Scope, name: Rc<String>) -> VarAlloc {
+        return ScopeLookup::get(&this, &name, false).unwrap_or_else(|| {
+            let this = RefCell::borrow_mut(this);
+            let ret = VarAlloc::LocalAt(name.clone(), this.local_counter);
+            this.local_counter += 1;
+            this.cur.insert(name.clone(), ret.clone());
+            ret
+        });
+    }
+
+    pub fn get_or_global(this: &Scope, name: Rc<String>) -> VarAlloc {
+        return ScopeLookup::get(this, &name, false)
+            .unwrap_or_else(|| ScopeLookup::insert_top(this, name));
+    }
+
+    pub fn insert_top(this: &Scope, name: Rc<String>) -> VarAlloc {
+        if let Some(prev) = &RefCell::borrow(this).prev {
+            return ScopeLookup::insert_top(prev, name);
+        } else {
+            let v = VarAlloc::Static(name, JsVar::new_t());
+            RefCell::borrow(this).cur.insert(name.clone(), v.clone());
+            return v;
+        }
+    }
+
+    pub fn temp_var(this: &Scope) -> VarAlloc {
+        let mut this = borm(this);
+        this.local_counter += 1;
+        return VarAlloc::LocalAt(Rc::new("".into()), this.local_counter - 1);
+    }
+}
+
+pub struct OpBuilder {
+    scopes: Scope,
+    statements: Vec<FnOpRepr>,
+}
+fn borm(s: &Scope) -> RefMut<ScopeLookup> {
+    RefCell::borrow_mut(s)
+}
+fn bor(s: &Scope) -> Ref<ScopeLookup> {
+    RefCell::borrow(s)
+}
+impl OpBuilder {
+    pub fn start() -> OpBuilder {
+        OpBuilder {
+            scopes: ScopeLookup::new(),
+            statements: vec![],
+        }
+    }
+
+    fn sub_b(&mut self) -> OpBuilder {
+        OpBuilder {
+            scopes: self.scopes.clone(),
+            statements: vec![],
+        }
+    }
+
+    fn scope(&mut self, heap_break: bool) -> OpBuilder {
+        OpBuilder {
+            scopes: Sl::child(self.scopes.clone(), heap_break),
+            statements: vec![],
+        }
+    }
+
+    pub fn var_dec(&mut self, t: VType, name: Rc<String>) -> &mut Self {
+        ScopeLookup::insert_here(&self.scopes, name.clone());
+        self
+    }
+
+    pub fn var_r(&mut self, name: Rc<String>) -> &mut Self {
+        self.statements.push(FnOpRepr::ReadVar {
+            which: Sl::get_or_global(&self.scopes, name),
+        });
+        self
+    }
+
+    pub fn var_w(&mut self, name: Rc<String>, what: impl FnOnce(&mut OpBuilder)) -> &mut OpBuilder {
+        let result = self.sub_b();
+        what(self);
+        self.statements.push(FnOpRepr::Assign {
+            target: Sl::get_or_global(&self.scopes, name),
+            what: Rc::new(FnOpRepr::Multi {
+                block: result.statements,
+            }),
+        });
+        self
+    }
+
+    pub fn var_w_t(&mut self, v: VarAlloc, what: impl FnOnce(&mut OpBuilder)) -> &mut OpBuilder {
+        let result = self.sub_b();
+        what(self);
+        self.statements.push(FnOpRepr::Assign {
+            target: v,
+            what: Rc::new(FnOpRepr::Multi {
+                block: result.statements,
+            }),
+        });
+        self
+    }
+
+    pub fn var_r_t(&mut self, v: VarAlloc) {
+        self.statements.push(FnOpRepr::ReadVar { which: v })
+    }
+
+    pub fn block(&mut self, builder: impl FnOnce(&mut OpBuilder)) -> &mut Self {
+        let mut block = OpBuilder {
+            scopes: ScopeLookup::child(self.scopes.clone(), false),
+            statements: vec![],
+        };
+        builder(&mut block);
+        self.statements.append(&mut block.statements);
+        self
+    }
+
+    pub fn ifb(
+        &mut self,
+        condition: impl FnOnce(&mut OpBuilder),
+        if_block: impl FnOnce(&mut OpBuilder),
+    ) -> &mut OpBuilder {
+        self.if_elseb(condition, if_block, |_| {});
+        self
+    }
+
+    pub fn if_elseb(
+        &mut self,
+        condition: impl FnOnce(&mut OpBuilder),
+        if_block: impl FnOnce(&mut OpBuilder),
+        else_block: impl FnOnce(&mut OpBuilder),
+    ) -> &mut OpBuilder {
+        let mut c_b = self.sub_b();
+        let mut i_b = self.sub_b();
+        let mut e_b = self.sub_b();
+
+        condition(&mut c_b);
+        if_block(&mut i_b);
+        else_block(&mut e_b);
+
+        self.statements.push(FnOpRepr::IfElse {
+            condition: Rc::new(FnOpRepr::Multi {
+                block: c_b.statements,
+            }),
+            if_block: Rc::new(FnOpRepr::Multi {
+                block: i_b.statements,
+            }),
+            else_block: Rc::from(FnOpRepr::Multi {
+                block: e_b.statements,
+            }),
+        });
+
+        self
+    }
+
+    pub fn ret(&mut self, what: impl FnOnce(&mut OpBuilder)) -> &mut OpBuilder {
+        let mut result = self.sub_b();
+        what(&mut result);
+        self.statements.push(FnOpRepr::Return {
+            what: Rc::from(FnOpRepr::Multi {
+                block: result.statements,
+            }),
+        });
+        self
+    }
+
+    pub fn static_v(&mut self, what: JsValue) -> &mut OpBuilder {
+        self.statements.push(FnOpRepr::LoadStatic { value: what });
+        self
+    }
+
+    pub fn throw(&mut self, what: impl FnOnce(&mut OpBuilder)) -> &mut OpBuilder {
+        let mut result = self.sub_b();
+        what(&mut result);
+        self.statements.push(FnOpRepr::Throw {
+            what: Rc::new(FnOpRepr::Multi {
+                block: result.statements,
+            }),
+        });
+
+        self
+    }
+
+    pub fn while_l(
+        &mut self,
+        condition: impl FnOnce(&mut OpBuilder),
+        body: impl FnOnce(&mut OpBuilder),
+    ) -> &mut OpBuilder {
+        let cond_r = self.sub_b();
+        let body_r = self.sub_b();
+        self.statements.push(FnOpRepr::While {
+            condition: Rc::from(FnOpRepr::Multi {
+                block: cond_r.statements,
+            }),
+            block: Rc::from(FnOpRepr::Multi {
+                block: body_r.statements,
+            }),
+        });
+
+        self
+    }
+
+    pub fn for_l(
+        &mut self,
+        init: impl FnOnce(&mut OpBuilder),
+        condition: impl FnOnce(&mut OpBuilder),
+        each: impl FnOnce(&mut OpBuilder),
+        body: impl FnOnce(&mut OpBuilder),
+    ) -> &mut OpBuilder {
+        let mut init_r = self.sub_b();
+        let mut cond_r = self.sub_b();
+        let mut each_r = self.sub_b();
+        let mut body_r = self.sub_b();
+
+        init(&mut init_r);
+        condition(&mut cond_r);
+        each(&mut each_r);
+        body(&mut body_r);
+
+        self.statements.push(FnOpRepr::For {
+            initial: Rc::new(FnOpRepr::Multi {
+                block: init_r.statements,
+            }),
+            condition: Rc::new(FnOpRepr::Multi {
+                block: cond_r.statements,
+            }),
+            each: Rc::new(FnOpRepr::Multi {
+                block: each_r.statements,
+            }),
+            block: Rc::new(FnOpRepr::Multi {
+                block: body_r.statements,
+            }),
+        });
+        self
+    }
+
+    pub fn literal(&mut self, val: JsValue) -> &mut OpBuilder {
+        self.statements.push(FnOpRepr::LoadStatic { value: val });
+        self
+    }
+
+    pub fn func(&mut self, body: impl FnOnce(&mut OpBuilder)) -> &mut OpBuilder {
+        let mut f = self.scope(true);
+        body(&mut f);
+        self.statements.push(FnOpRepr::InstantiateFunction {
+            vars: Rc::new(bor(&f.scopes).get_captures()),
+            code: Rc::new(FnOpRepr::Multi {
+                block: f.statements,
+            }),
+        });
+        self
+    }
+
+    pub fn array_e(&mut self) -> &mut OpBuilder {
+        self.statements.push(FnOpRepr::NewObject { is_array: true });
+        self
+    }
+
+    pub fn var_t(&mut self) -> VarAlloc {
+        Sl::temp_var(&self.scopes) // TODO check that the local var is used locally only
+    }
+
+    pub fn load_global(&mut self, name: Rc<String>) {
+        self.statements.push(FnOpRepr::LoadGlobal { name })
+    }
+
+    pub fn deref(
+        &mut self,
+        value: impl FnOnce(&mut OpBuilder),
+        key: impl FnOnce(&mut OpBuilder),
+    ) -> &mut OpBuilder {
+        let mut k = self.sub_b();
+        let mut v = self.sub_b();
+        key(&mut k);
+        value(&mut v);
+
+        self.statements.push(FnOpRepr::Deref {
+            from: Rc::new(FnOpRepr::Multi {
+                block: k.statements,
+            }),
+            key: Rc::new(FnOpRepr::Multi {
+                block: v.statements,
+            }),
+        });
+        self
+    }
+
+    pub fn call(
+        &mut self,
+        this: VarAlloc,
+        on: impl FnOnce(&mut OpBuilder),
+        args: impl FnOnce(&mut OpBuilder),
+    ) -> &mut OpBuilder {
+        let mut on_b = self.sub_b();
+        let mut args_b = self.sub_b();
+        on(&mut on_b);
+        args(&mut args_b);
+
+        self.statements.push(FnOpRepr::CallFunction {
+            this,
+            on: Rc::new(FnOpRepr::Multi {
+                block: on_b.statements,
+            }),
+            arg_array: Rc::new(FnOpRepr::Multi {
+                block: args_b.statements,
+            }),
+        });
+        self
+    }
+
+    pub fn this(&mut self) -> VarAlloc {
+        VarAlloc::LocalAt(Rc::new("".into()), 0)
+    }
+
+    pub fn args(&mut self) -> VarAlloc {
+        VarAlloc::LocalAt(Rc::new("".into()), 1)
+    }
+
+    pub fn build(self) -> JsValue {
+        JsObjectBuilder::new(None)
+            .with_callable(JSCallable::Js { content: Rc::new("".to_string()), creator: Gc::new(JsFn { 
+                ops: Rc::new(FnOpRepr::Multi { block: self.statements }), 
+                captures: Rc::new(vec![])
+            })})
+            .build()
+    }
+}
+
+pub enum VType {
+    Const,
+    Let,
+    Var,
 }

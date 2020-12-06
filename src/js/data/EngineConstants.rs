@@ -1,7 +1,8 @@
+use crate::js::data::js_execution::NativeFunction;
 use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsValue};
 use crate::js::data::stdlib::StdLib;
 use crate::js::data::util::JsObjectBuilder;
-use gc::Gc;
+use gc::*;
 use std::rc::Rc;
 
 pub struct EngineConstants {
@@ -30,6 +31,9 @@ fn build_symbol(name: Rc<String>, strings: &ConstantStrings, sym_proto: JsValue)
         .build();
 }
 
+#[derive(Trace, Finalize)]
+struct SymbolBuilder {}
+
 impl EngineConstants {
     pub fn new() -> EngineConstants {
         let strings = Rc::new(ConstantStrings {
@@ -39,14 +43,15 @@ impl EngineConstants {
         });
 
         let strings_clone = strings.clone();
+
+        impl NativeFunction for SymbolBuilder {
+            fn native_call(&self, this: JsValue, args: JsValue) -> Result<JsValue, JsValue> {
+                Ok(JsObjectBuilder::new(None).with_being_symbol().build())
+            }
+        }
         let symbol_constr = JsObjectBuilder::new(Some(&strings))
             .with_callable(JSCallable::Native {
-                creator: Gc::new(JsFn::simple_call((), move |_, mut args| {
-                    Ok(JsObjectBuilder::new(Some(&strings_clone))
-                        .with_being_symbol()
-                        .with_prop(strings_clone.description.clone(), args)
-                        .build())
-                })),
+                op: Rc::new(SymbolBuilder {}),
             })
             .build();
 

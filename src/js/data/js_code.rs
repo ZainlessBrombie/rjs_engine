@@ -1,18 +1,15 @@
 extern crate swc_ecma_parser;
 use self::swc_ecma_parser::JscTarget;
 use crate::js::data::gc_util::GcDestr;
-use crate::js::data::js_execution::{build_demo_fn, EngineState, FnOpRepr, JsVar, VarAlloc};
+use crate::js::data::js_execution::{EngineState, FnOpRepr, JsVar, VarAlloc};
 use crate::js::data::js_types;
 use crate::js::data::js_types::{JSCallable, JsFn, JsNext, JsObj, JsValue};
 use crate::js::data::util::{
-    s_pool, u_array, u_array_e, u_assign, u_block, u_bool, u_cached, u_call, u_call_simple,
-    u_deref, u_function, u_if, u_if_else, u_it_next, u_literal, u_load_global, u_not, u_null,
-    u_number, u_obj, u_plus_num, u_read_var, u_return, u_string, u_this, u_true, u_undefined,
-    u_while, u_write_var, JsObjectBuilder,
+    s_pool, u_bool, u_null, u_number, u_string, u_true, u_undefined, OpBuilder, VType,
 };
 use gc::{Finalize, Gc, GcCell, Trace};
 use std::any::Any;
-use std::borrow::BorrowMut;
+use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Write;
@@ -26,8 +23,9 @@ use swc_common::errors::{DiagnosticBuilder, Emitter};
 use swc_common::sync::Lrc;
 use swc_common::{errors::Handler, FileName, SourceMap};
 use swc_ecma_ast::{
-    ArrowExpr, BlockStmtOrExpr, Decl, Expr, ExprOrSpread, ExprOrSuper, Function, Lit, Module,
-    ModuleItem, ObjectPatProp, Pat, Prop, PropName, PropOrSpread, Stmt, VarDecl, VarDeclOrExpr,
+    ArrowExpr, BinaryOp, BlockStmtOrExpr, Decl, Expr, ExprOrSpread, ExprOrSuper, Function, Lit,
+    Module, ModuleItem, ObjectPatProp, Pat, PatOrExpr, Prop, PropName, PropOrSpread, Stmt,
+    UpdateOp, VarDecl, VarDeclOrExpr,
 };
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax};
 
@@ -46,7 +44,7 @@ impl Emitter for Empty {
 }
 
 pub struct JsEngine {
-    eng: Rc<JsEngineInternal>,
+    eng: Box<JsEngineInternal>,
 }
 
 struct JsEngineInternal {
@@ -55,104 +53,10 @@ struct JsEngineInternal {
     state: EngineState,
 }
 
-#[derive(Trace, Finalize)]
-pub struct ScopeLookup<'a> {
-    cur: HashMap<Rc<String>, VarAlloc>,
-    prev: Option<&'a mut ScopeLookup<'a>>,
-    local_counter: usize,
-    heap_break: bool,
-}
-
-impl ScopeLookup {
-    pub fn new(
-        prev: Option<&mut ScopeLookup>,
-        heap_break: bool,
-    ) -> ScopeLookup {
-        ScopeLookup {
-            cur: Default::default(),
-            prev: prev.map_or(None, |r| Some(r.clone())),
-            local_counter: 2,
-            heap_break,
-        }
-    }
-
-    pub fn get(&mut self, name: &Rc<String>, heaped: bool) -> Option<VarAlloc> {
-        let mut b = 1;
-        let a = Rc::new(&mut b);
-        *a += 1; // TODO
-        let ret = self
-            .cur
-            .get(name)
-            .map(|r| {
-                if heaped {
-                    return VarAlloc::CapturedAt {
-                        name: name.clone(),
-                        from: r.clone(),
-                        target: 0
-                    };
-                }
-                r.clone()
-            })
-            .or_else(|| {
-                self.prev
-                    .as_ref()
-                    .map_or(None, |mut p| {
-                        if heaped {
-                            p.get(&name, false).map(|source| {
-                                return VarAlloc::CapturedAt {
-                                    name: name.clone(),
-                                    from: source,
-                                    target: 0
-                                };
-                            })
-                        } else {
-                            p.get(&name, self.heap_break) // TODO possibly incorrect
-                        }
-                    })
-            });
-    }
-
-    pub fn insert_here(&mut self, name: Rc<String>) -> VarAlloc {
-        return self.get(&name, false).unwrap_or_else(|| {
-            let ret = VarAlloc::LocalAt(name.clone(), self.local_counter);
-            self.local_counter += 1;
-            self.cur.insert(name.clone(), ret.clone());
-            ret
-        });
-    }
-
-    fn get_incr_local_counter(&mut self) -> Option<usize> {
-        if self.heap_break {
-            self.local_counter += 1;
-            return Option::from(self.local_counter - 1);
-        } else if let Some(prev) = &self.prev {
-            return RefCell::borrow_mut(prev).get_incr_local_counter();
-        } else {
-            return None; // We are global
-        }
-    }
-
-    pub fn get_or_global(&mut self, name: Rc<String>) -> VarAlloc {
-        return self
-            .get(&name, false)
-            .unwrap_or_else(|| self.insert_top(name));
-    }
-
-    pub fn insert_top(&mut self, name: Rc<String>) -> VarAlloc {
-        if let Some(prev) = self.prev {
-            return prev.insert_top(name);
-        } else {
-            let v = VarAlloc::Static(name, JsVar::new_t());
-            self.cur.insert(name.clone(), v.clone());
-            return v;
-        }
-    }
-}
-
 impl JsEngine {
     pub fn new() -> JsEngine {
         return JsEngine {
-            eng: Rc::new(JsEngineInternal {
+            eng: Box::new(JsEngineInternal {
                 max_mem: 1_000_000,
                 cur_mem: AtomicU64::new(0),
                 state: EngineState {
@@ -165,332 +69,221 @@ impl JsEngine {
 
     /// Returns a JsValue that represents a function. when it is called, the module is executed and returned by the function.
     pub fn ingest_code(&self, mut module: Module) -> JsValue {
-        let mut scope = ScopeLookup::new(None, false);
-        let ret =module
+        let mut b = OpBuilder::start();
+        let ret = module
             .body
             .drain(..)
             .map(|mod_item| match &mod_item {
                 ModuleItem::ModuleDecl(_declr) => {
                     println!("Skipping module item!");
-                    return FnOpRepr::Nop {};
                 }
                 ModuleItem::Stmt(stmt) => {
-                    return self.ingest_statement(&mut scope, stmt);
+                    self.ingest_statement(&mut b, stmt);
                 }
             })
             .collect::<Vec<_>>();
-        return JsObjectBuilder::new(None)
-            .with_callable(JSCallable::Js { content: Rc::new("".into()), creator: Gc::new(JsFn { ops: Rc::new(FnOpRepr::Multi { block: ret }), captures: Rc::new(vec![]) })})
-            .build();
+        b.build()
     }
 
-    fn ingest_statement(&self, scopes: &mut ScopeLookup, stmt: &Stmt) -> FnOpRepr {
-        // TODO make scopelookup a &mut
+    fn ingest_statement(&self, b: &mut OpBuilder, stmt: &Stmt) {
         match &stmt {
             Stmt::Block(block) => {
-                let block_scope = ScopeLookup::new(Some(scopes), false);
-                return FnOpRepr::Multi {
-                    block: block
-                        .stmts
-                        .iter()
-                        .map(|stmt| self.ingest_statement(block_scope.clone(), stmt))
-                        .collect(),
-                };
+                b.block(|b| {
+                    for stmt in &block.stmts {
+                        self.ingest_statement(b, stmt)
+                    }
+                });
             }
-            Stmt::Empty(_stmt) => return FnOpRepr::Nop {},
+            Stmt::Empty(_stmt) => {}
             Stmt::Debugger(_stmt) => {
                 println!("Note: skipping debugger statement");
-                return FnOpRepr::Nop {};
             }
             Stmt::With(_with_stmt) => {
                 println!("Note: skipping with statement");
-                return FnOpRepr::Nop {};
             }
             Stmt::Return(ret_stmt) => {
                 if let Some(ret_stmt) = &ret_stmt.arg {
-                    return FnOpRepr::Return {
-                        what: Rc::new(self.ingest_expression(scopes, ret_stmt)),
-                    };
+                    b.ret(|b| {
+                        self.ingest_expression(b, ret_stmt);
+                    });
                 } else {
-                    return FnOpRepr::Return {
-                        what: Rc::from(FnOpRepr::LoadStatic {
-                            value: JsValue::Undefined,
-                        }),
-                    };
+                    b.ret(|b| {
+                        b.static_v(u_undefined());
+                    });
                 }
             }
             Stmt::Labeled(_lbl) => {
                 println!("Note: label not supported");
-                return FnOpRepr::Nop {};
             }
             Stmt::Break(_break_stmt) => {
                 println!("Note: break not supported");
-                return FnOpRepr::Nop {};
             }
             Stmt::Continue(_) => {
                 println!("Note: continue not supported");
-                return FnOpRepr::Nop {};
             }
             Stmt::If(if_stmt) => {
-                return FnOpRepr::IfElse {
-                    condition: Rc::new(
-                        self.ingest_expression(
-                            &mut ScopeLookup::new(Some(scopes), false),
-                            &if_stmt.test,
-                        ),
-                    ),
-                    if_block: Rc::new(
-                        self.ingest_statement(
-                            &mut ScopeLookup::new(Some(scopes), false),
-                            &if_stmt.cons,
-                        ),
-                    ),
-                    else_block: Rc::new(
-                        (&if_stmt.alt)
-                            .as_ref()
-                            .map(|stmt| self.ingest_statement(scopes, &stmt))
-                            .unwrap_or(FnOpRepr::Nop {}),
-                    ),
-                }
+                b.if_elseb(
+                    |cb| {
+                        self.ingest_expression(cb, &if_stmt.test);
+                    },
+                    |bb| {
+                        self.ingest_statement(bb, &if_stmt.cons);
+                    },
+                    |eb| {
+                        if let Some(alt) = &if_stmt.alt {
+                            self.ingest_statement(eb, &alt);
+                        }
+                    },
+                );
             }
             Stmt::Switch(_) => {
                 println!("Note: switch not supported");
-                return FnOpRepr::Nop {};
             }
             Stmt::Throw(throw_stmt) => {
-                return FnOpRepr::Throw {
-                    what: Rc::new(this.ingest_expression(scopes, &throw_stmt.arg)),
-                }
+                b.throw(|b| {
+                    self.ingest_expression(b, &throw_stmt.arg);
+                });
             }
             Stmt::Try(_) => {
                 println!("Note: try not supported");
-                return FnOpRepr::Nop {};
             }
             Stmt::While(while_stmt) => {
-                return FnOpRepr::While {
-                    condition: Rc::new(self.ingest_expression(scopes, &while_stmt.test)),
-                    block: Rc::new(self.ingest_statement(
-                        &mut ScopeLookup::new(Some(scopes), false),
-                        &while_stmt.body,
-                    )),
-                }
+                b.while_l(
+                    |b| {
+                        self.ingest_expression(b, &while_stmt.test);
+                    },
+                    |b| self.ingest_statement(b, &while_stmt.body),
+                );
             }
             Stmt::DoWhile(_) => {
                 println!("Note: do while not supported");
-                return FnOpRepr::Nop {};
             }
             Stmt::For(for_stmt) => {
-                return FnOpRepr::For {
-                    initial: Rc::new(
-                        for_stmt
-                            .init
-                            .map(|var_or_expr| match var_or_expr {
-                                VarDeclOrExpr::VarDecl(var_decl) => {
-                                    self.ingest_var_decl(scopes, &var_decl)
-                                }
-                                VarDeclOrExpr::Expr(expr) => {
-                                    self.ingest_expression(scopes, expr.as_ref())
-                                }
-                            })
-                            .unwrap_or(FnOpRepr::Nop {}),
-                    ),
-                    condition: Rc::new(
-                        for_stmt
-                            .test
-                            .map(|test| self.ingest_expression(scopes, &test))
-                            .unwrap_or(FnOpRepr::Nop {}),
-                    ),
-                    each: Rc::new(
-                        for_stmt
-                            .update
-                            .map(|test| self.ingest_expression(scopes, &test))
-                            .unwrap_or(FnOpRepr::Nop {}),
-                    ),
-                    block: Rc::new(
-                        self.ingest_statement(
-                            &mut ScopeLookup::new(Some(scopes), false),
-                            &for_stmt.body,
-                        ),
-                    ),
-                };
+                b.for_l(
+                    |b| {
+                        if let Some(init) = &for_stmt.init {
+                            match init {
+                                VarDeclOrExpr::VarDecl(dec) => {}
+                                VarDeclOrExpr::Expr(expr) => {}
+                            }
+                        }
+                    },
+                    |b| {
+                        if let Some(cond) = &for_stmt.test {
+                            self.ingest_expression(b, &cond);
+                        } else {
+                            b.literal(u_true());
+                        }
+                    },
+                    |b| {
+                        if let Some(each) = &for_stmt.update {
+                            self.ingest_expression(b, &each);
+                        }
+                    },
+                    |b| {
+                        self.ingest_statement(b, &for_stmt.body);
+                    },
+                );
             }
-            Stmt::ForIn(_) => {
-                unimplemented!()
-            }
-            Stmt::ForOf(_) => {
-                unimplemented!()
-            }
+            Stmt::ForIn(_) => {}
+            Stmt::ForOf(_) => {}
             Stmt::Decl(decl) => match decl {
-                Decl::Class(_) => {
-                    unimplemented!()
-                }
+                Decl::Class(_) => {}
                 Decl::Fn(f) => {
-                    return self.ingest_function(scopes, &f.function);
+                    b.var_dec(VType::Let, Rc::new(f.ident.sym.to_string()));
+                    b.var_w(Rc::new(f.ident.sym.to_string()), |b| {
+                        self.ingest_function(b, &f.function);
+                    });
                 }
                 Decl::Var(v) => {
-                    return self.ingest_var_decl(scopes, v);
+                    self.ingest_var_decl(b, v);
                 }
-                Decl::TsInterface(_) => {
-                    unimplemented!()
-                }
-                Decl::TsTypeAlias(_) => {
-                    unimplemented!()
-                }
-                Decl::TsEnum(_) => {
-                    unimplemented!()
-                }
-                Decl::TsModule(_) => {
-                    unimplemented!()
-                }
+                Decl::TsInterface(_) => {}
+                Decl::TsTypeAlias(_) => {}
+                Decl::TsEnum(_) => {}
+                Decl::TsModule(_) => {}
             },
             Stmt::Expr(expr) => {
-                return self.ingest_expression(scopes, &expr.expr);
+                self.ingest_expression(b, &expr.expr);
             }
         }
     }
 
-    fn ingest_var_decl(&self, scopes: &mut ScopeLookup, decl: &VarDecl) -> FnOpRepr {
-        return FnOpRepr::Multi {
-            block: decl
-                .decls
-                .iter()
-                .map(|decl_single| {
-                    // GcCell::borrow_mut(&scopes).insert_here(Rc::new(unimplemented!()));
-                    let init = ScopeLookup::insert_here(
-                        scopes,
-                        Rc::new(unimplemented!()),
-                    );
-                    return unimplemented!();
-                })
-                .collect(),
-        };
+    fn ingest_var_decl(&self, b: &mut OpBuilder, decl: &VarDecl) {
+        for x in decl.decls.iter().map(|decl_single| {
+            self.ingest_assignment(b, &decl_single.name, |b| {
+                if let Some(init) = &decl_single.init {
+                    self.ingest_expression(b, &init);
+                }
+            });
+        }) {}
     }
 
     fn ingest_assignment(
         &'a self,
-        scopes: &mut ScopeLookup,
+        b: &mut OpBuilder,
         pat: &Pat,
-        source: FnOpRepr,
-        declare: bool,
+        source: impl FnOnce(&mut OpBuilder),
     ) -> FnOpRepr {
         // TODO dup code
-        let scopes_copy = scopes;
         let prop_name = move |prop: &PropName| {
             return match &prop {
-                PropName::Ident(ident) => u_literal(u_string(ident.sym.to_string().as_str())),
-                PropName::Str(sym) => u_literal(u_string(sym.value.to_string().as_str())),
-                PropName::Num(n) => u_literal(u_number(n.value)),
-                PropName::Computed(comp) => {
-                    self.ingest_expression(scopes, comp.expr.as_ref())
-                }
-                PropName::BigInt(big_int) => u_literal(u_number(
+                PropName::Ident(ident) => u_string(ident.sym.to_string().as_str()),
+                PropName::Str(sym) => u_string(sym.value.to_string().as_str()),
+                PropName::Num(n) => u_number(n.value),
+                PropName::Computed(comp) => unimplemented!(),
+                PropName::BigInt(big_int) => u_number(
                     format!("{:o}", big_int.value)
                         .parse()
                         .expect("bigint unimplemented!"),
-                )),
+                ),
             };
         };
-        let scopes = scopes_copy;
         match pat {
             Pat::Ident(ident) => {
-                let to = GcCell::borrow_mut(scopes)
-                    .get(&Rc::new(ident.sym.to_string()))
-                    .unwrap_or_else(|| {
-                        if declare {
-                            GcCell::borrow_mut(scopes).insert_top(Rc::new(ident.sym.to_string()))
-                        } else {
-                            GcCell::borrow_mut(scopes).insert_here(Rc::new(ident.sym.to_string()))
-                        }
-                    });
-                return FnOpRepr::Assign {
-                    target: to,
-                    what: Rc::new(source),
-                };
+                b.var_dec(VType::Let, Rc::new(ident.sym.to_string()));
+                b.var_w(Rc::new(ident.sym.to_string()), source);
             }
             Pat::Array(arr) => {
-                let mut result = Vec::new();
-
-                let iterator = u_deref(
-                    source,
-                    u_deref(u_load_global("Symbol"), u_literal(u_string("iterator"))),
-                );
-                let (arr_var, array) = u_cached(scopes, u_array_e());
-                result.push(array.clone());
-
-                let mut it_provider = u_cached(scopes, iterator).1;
-                let (push_var, mut array_push_provider) = u_cached(
-                    scopes,
-                    u_deref(u_read_var(arr_var), u_literal(u_string("push"))),
-                );
-                result.push(array_push_provider.clone());
+                let arr_v = b.var_t();
+                b.var_w_t(arr_v.clone(), |b| {
+                    b.array_e();
+                });
+                let it = b.var_t();
+                b.var_w_t(it.clone(), |b| {
+                    b.deref(
+                        |b| {
+                            b.var_r_t(arr_v.clone());
+                        },
+                        |b| {
+                            b.deref(
+                                |b| b.load_global(s_pool("Symbol")),
+                                |b| {
+                                    b.static_v(u_string("iterator"));
+                                },
+                            );
+                        },
+                    );
+                });
 
                 for x in &arr.elems {
-                    if let Some(p) = x.as_ref() {
-                        if let Pat::Rest(rest) = p {
-                            let v = scopes.insert_here(Rc::new("".into()));
-                            let v2 = scopes.insert_here(Rc::new("".into()));
-                            result.push(u_write_var(v, u_literal(u_true())));
-                            result.push(u_while(
-                                u_read_var(v.clone()),
-                                u_block(vec![
-                                    u_write_var(v2.clone(), it_provider.clone()),
-                                    u_if_else(
-                                        u_deref(
-                                            u_read_var(v2.clone()),
-                                            u_literal(u_string("done")),
-                                        ),
-                                        u_write_var(v.clone(), u_literal(JsValue::Boolean(false))),
-                                        u_call(
-                                            arr_var.clone(),
-                                            array_push_provider.clone(),
-                                            u_array(vec![u_deref(
-                                                u_read_var(v2.clone()),
-                                                u_literal(u_string("value")),
-                                            )]),
-                                        ),
-                                    ),
-                                ]),
-                            ));
-                            result.push(self.ingest_assignment(scopes, &rest.arg, array.clone(), declare));                            ));
-                            break;
-                        }
-                        result.push(self.ingest_assignment(scopes)(
-                            p,
-                            u_call_simple(arr_var.clone(), u_deref(it_provider.clone(), u_literal(u_string("next")))),
-                            declare,
-                        ));
-                    }
+                    unimplemented!()
                 }
-                return FnOpRepr::Multi { block: result };
             }
             Pat::Rest(_) => {
                 unreachable!("We SHOULD have handled this in the code above?!")
             }
             Pat::Object(obj) => {
-                let mut result = Vec::new();
-                let mut target = u_cached(scopes, source).1;
                 for pat_prop in &obj.props {
                     match pat_prop {
                         ObjectPatProp::KeyValue(key_value) => {
-                            // TODO is to_string ok?
-                            result.push(self.ingest_assignment(scopes, &key_value.value, target.clone()));
+                            unimplemented!()
                         }
                         ObjectPatProp::Assign(assign) => {
                             if let Some(v) = &assign.value {
-                                result.push(u_write_var(
-                                    scopes
-                                        .get_or_global(Rc::new(assign.key.sym.to_string())),
-                                    self.ingest_expression(scopes, v),
-                                ));
+                                unimplemented!()
                             } else {
-                                result.push(u_write_var(
-                                    scopes
-                                        .get_or_global(Rc::new(assign.key.sym.to_string())),
-                                    u_deref(
-                                        target(),
-                                        u_literal(u_string(&assign.key.sym.to_string())),
-                                    ),
-                                ))
+                                unimplemented!()
                             }
                         }
                         ObjectPatProp::Rest(obj_rest) => {
@@ -500,205 +293,145 @@ impl JsEngine {
                 }
             }
             Pat::Assign(assign) => {
-                return self.ingest_assignment(scopes)(
-                    &assign.left,
-                    self.ingest_expression(scopes)(&assign.right),
-                    false,
-                );
+                return self.ingest_assignment(b, &assign.left, source);
             }
             Pat::Invalid(invalid) => {
                 unimplemented!("Invalid assignment is todo")
             }
             Pat::Expr(expr) => {
-                return self.ingest_expression(scopes)(&expr);
+                return self.ingest_expression(b, &expr);
             }
         }
         unimplemented!()
     }
 
-    fn ingest_expression(&self, scopes: &mut ScopeLookup, expr: &Expr) -> FnOpRepr {
-        let prop_name = |prop: &PropName| {
+    fn ingest_expression(&self, b: &mut OpBuilder, expr: &Expr) -> FnOpRepr {
+        let prop_name = |b: &mut OpBuilder, prop: &PropName| {
             return match prop {
-                PropName::Ident(ident) => u_literal(u_string(ident.sym.to_string().as_str())),
-                PropName::Str(sym) => u_literal(u_string(sym.value.to_string().as_str())),
-                PropName::Num(n) => u_literal(u_number(n.value)),
-                PropName::Computed(comp) => self.ingest_expression(scopes, &comp.expr),
-                PropName::BigInt(big_int) => u_literal(u_number(
-                    format!("{:o}", big_int.value)
-                        .parse()
-                        .expect("bigint unimplemented!"),
-                )),
+                PropName::Ident(ident) => {
+                    b.literal(u_string(ident.sym.to_string().as_str()));
+                }
+                PropName::Str(sym) => {
+                    b.literal(u_string(sym.value.to_string().as_str()));
+                }
+                PropName::Num(n) => {
+                    b.literal(u_number(n.value));
+                }
+                PropName::Computed(comp) => unimplemented!(),
+                PropName::BigInt(big_int) => {
+                    b.literal(u_number(
+                        format!("{:o}", big_int.value)
+                            .parse()
+                            .expect("bigint unimplemented!"),
+                    ));
+                }
             };
         };
 
         match &expr {
             Expr::This(_) => {
-                return u_this();
+                let alloc = b.this();
+                b.var_r_t(alloc);
             }
             Expr::Array(arr_lit) => {
-                let arr = u_array_e();
-                let mut push = u_deref(arr.clone(), u_literal(u_string("push")));
-                let mut ret = Vec::new();
-                for exp in &arr_lit.elems {
-                    if let Some(exp) = exp {
-                        if let Some(_spread) = exp.spread {
-                            let mut it = u_cached(&scopes, u_deref(
-                                self.ingest_expression(scopes, &exp.expr),
-                                u_deref(u_load_global("Symbol"), u_literal(u_string("iterator"))),
-                            )).1;
-                            // TODO dup code
-                            let done = scopes.insert_here(Rc::new("".into()));
-                            let (has_next, value) = u_it_next(it());
-                            u_while(
-                                u_not(u_read_var(done.clone())),
-                                u_block(vec![
-                                    u_call(array.clone(), push(), u_array(vec![value])),
-                                    u_if(u_not(has_next), u_write_var(done, u_literal(u_true()))),
-                                ]),
-                            );
-                        }
-                        ret.push(u_call(
-                            push(),
-                            u_array(vec![self.ingest_expression(scopes)(&exp.expr)]),
-                        ))
-                    } else {
-                        ret.push(u_assign(
-                            arr.clone(),
-                            u_literal(u_string("length")),
-                            u_plus_num(
-                                u_deref(arr.clone(), u_literal(u_string("length"))),
-                                u_literal(u_number(1.0)),
-                            ),
-                        ));
-                    }
-                    ret.push(arr.clone());
-                    return u_block(ret);
-                }
+                unimplemented!()
             }
             Expr::Object(lit) => {
-                let obj = u_obj();
-                let mut ret = Vec::new();
-                for prop_or_spread in &lit.props {
-                    match prop_or_spread {
-                        PropOrSpread::Spread(spread) => {}
-                        PropOrSpread::Prop(prop) => match Box::deref(&prop) {
-                            Prop::Shorthand(shorthand) => {
-                                let name: String = shorthand.sym.to_string();
-                                ret.push(u_assign(
-                                    u_literal(obj.clone()),
-                                    u_literal(u_string(name.as_str())),
-                                    u_read_var(
-                                        scopes.get_or_global(Rc::new(name)),
-                                    ),
-                                ))
-                            }
-                            Prop::KeyValue(kv) => ret.push(u_assign(
-                                u_literal(obj.clone()),
-                                prop_name(&kv.key),
-                                self.ingest_expression(scopes)(&kv.value),
-                            )),
-                            Prop::Assign(assign) => {
-                                let k = assign.key.sym.to_string();
-                                ret.push(u_assign(
-                                    u_literal(obj.clone()),
-                                    u_literal(u_string(&k)),
-                                    self.ingest_expression(scopes)(&assign.value),
-                                ))
-                            }
-                            Prop::Getter(_getter) => {
-                                unimplemented!("getters are not implemented yet")
-                            }
-                            Prop::Setter(_setter) => {
-                                unimplemented!("setters are not implemented yet")
-                            }
-                            Prop::Method(method) => {
-                                ret.push(u_assign(
-                                    u_literal(obj.clone()),
-                                    prop_name(&method.key),
-                                    self.ingest_function(scopes)(&method.function),
-                                ));
-                            }
-                        },
-                    }
-                }
+                unimplemented!()
             }
-            Expr::Fn(_) => {}
+            Expr::Fn(f) => {
+                self.ingest_function(b, &f.function);
+            }
             Expr::Unary(_) => {}
             Expr::Update(up) => {}
-            Expr::Bin(_) => {}
-            Expr::Assign(_) => {}
-            Expr::Member(_) => {}
-            Expr::Cond(_) => {}
+            Expr::Bin(bin) => {
+                unimplemented!()
+            }
+            Expr::Assign(assign) => match &assign.left {
+                PatOrExpr::Expr(expr) => {
+                    unimplemented!()
+                }
+                PatOrExpr::Pat(pat) => {
+                    self.ingest_assignment(b, pat, |b| {
+                        self.ingest_expression(b, &assign.right);
+                    });
+                }
+            },
+            Expr::Member(member) => {
+                // omg thank you swc
+                unimplemented!()
+            }
+            Expr::Cond(cond) => {
+                // ternary
+                unimplemented!()
+            }
             Expr::Call(call) => match &call.callee {
                 ExprOrSuper::Super(super_call) => {
                     unimplemented!()
                 }
                 ExprOrSuper::Expr(expr) => {
-                    let mut ops = Vec::new();
-
-                    let iterator = u_deref(
-                        self.ingest_expression(scopes, &expr),
-                        u_deref(u_load_global("Symbol"), u_literal(u_string("iterator"))),
+                    let this = b.var_t();
+                    b.call(
+                        this,
+                        |b| {
+                            self.ingest_expression(b, &expr);
+                        },
+                        |b| {
+                            let arr_v = b.var_t();
+                            b.var_w_t(arr_v.clone(), |b| {
+                                b.array_e();
+                            });
+                            let push = b.var_t();
+                            b.var_w_t(push.clone(), |b| {
+                                b.deref(
+                                    |b| {
+                                        b.var_r_t(arr_v.clone());
+                                    },
+                                    |b| {
+                                        b.literal(u_string("push"));
+                                    },
+                                );
+                            });
+                            for exp in &call.args {
+                                b.call(
+                                    arr_v.clone(),
+                                    |b| {
+                                        b.var_r_t(arr_v.clone());
+                                    },
+                                    |b| {
+                                        // TODO spread
+                                        self.ingest_expression(b, &exp.expr);
+                                    },
+                                );
+                            }
+                        },
                     );
-                    let (array_v, array) = u_cached(&scopes, u_array_e());
-                    ops.push(array);
-                    let mut it_provider = u_cached(&scopes, iterator);
-                    let (push_var, array_push_provider) = u_cached(&scopes, u_deref(
-                        array.clone(),
-                        u_literal(u_string("push")),
-                    ));
-
-
-                    for (i, arg_or_spread) in (&call.args).iter().enumerate() {
-                        if let Some(_spread) = &arg_or_spread.spread {
-                            let done = scopes.insert_here(s_pool(""));
-                            let (has_next, value) = u_it_next(it_provider());
-                            u_while(
-                                u_not(u_read_var(done.clone())),
-                                u_block(vec![
-                                    u_call(array_v.clone(), array_push_provider.clone(), u_array(vec![value])),
-                                    u_if(u_not(has_next), u_write_var(done, u_literal(u_true()))),
-                                ]),
-                            );
-                            break;
-                        }
-                        ops.push(u_call(
-                            array_v.clone(),
-                            array_push_provider.clone(),
-                            u_array(vec![u_it_next(it_provider()).1]),
-                        ));
-                    }
-                    ops.push(u_call(
-                        scopes.insert_here(s_pool("")),
-                        self.ingest_expression(scopes,&expr),
-                        array.clone(),
-                    ));
-                    return FnOpRepr::Multi { block: ops };
                 }
             },
             Expr::New(n) => {
                 unimplemented!()
             }
             Expr::Seq(seq) => {
-                let mut result = Vec::new();
-                for expr in &seq.exprs {
-                    result.push(self.ingest_expression(scopes)(&expr))
-                }
-                return u_block(result);
+                unimplemented!()
             }
             Expr::Ident(ident) => {
-                let name: String = ident.sym.to_string();
-                return u_read_var(scopes.get_or_global(Rc::new(name)));
+                b.var_r(Rc::new(ident.sym.to_string()));
             }
             Expr::Lit(lit) => match lit {
-                Lit::Str(s) => return u_literal(u_string(&s.value.to_string())),
-                Lit::Bool(b) => return u_literal(u_bool(b.value)),
-                Lit::Null(_) => return u_literal(u_null()),
+                Lit::Str(s) => {
+                    b.literal(u_string(&s.value.to_string()));
+                }
+                Lit::Bool(bo) => {
+                    b.literal(u_bool(bo.value));
+                }
+                Lit::Null(_) => {
+                    b.literal(u_null());
+                }
                 Lit::Num(n) => {
-                    return u_literal(u_number(n.value));
+                    b.literal(u_number(n.value));
                 }
                 Lit::BigInt(big_int) => {
-                    return u_literal(u_number(
+                    b.literal(u_number(
                         format!("{:o}", big_int.value)
                             .parse()
                             .expect("bigint unimplemented!"),
@@ -718,28 +451,7 @@ impl JsEngine {
                 unimplemented!("no jsx")
             }
             Expr::Arrow(arrow_expr) => {
-                let arrow_scope = ScopeLookup::new(Some(scopes), true);
-                let mut arrow_body = Vec::new();
-                match &arrow_expr.body {
-                    BlockStmtOrExpr::BlockStmt(b) => {
-                        for stmt in &b.stmts {
-                            arrow_body.push(self.ingest_statement(arrow_scope.clone(), stmt));
-                        }
-                    }
-                    BlockStmtOrExpr::Expr(expr) => {
-                        arrow_body.push(FnOpRepr::Return { what: Rc::from(self.ingest_expression(scopes, &expr)) });
-                    }
-                }
-
-                return u_literal(
-                    JsObjectBuilder::new(None)
-                        .with_callable(JSCallable::Js {
-                            content: Rc::new("TODO".to_string()),
-                            creator: JSCallable::Js { content: Rc::new("".to_string()), creator: Gc::new(JsFn
-                            { ops: Rc::new(FnOpRepr::Multi { block: arrow_body }), captures: Rc::new(vec![]) }) }
-                        })
-                        .build(),
-                );
+                unimplemented!()
             }
             Expr::Class(_) => {
                 unimplemented!("classes not implemented")
@@ -752,11 +464,11 @@ impl JsEngine {
             }
             Expr::Await(aw) => {
                 // TODO we are not handling await yet
-                return GcDestr::new(FnOpRepr::Await {
-                    what: Box::new(self.ingest_expression(scopes)(&aw.arg)),
-                });
+                unimplemented!()
             }
-            Expr::Paren(par) => return self.ingest_expression(scopes)(&par.expr),
+            Expr::Paren(par) => {
+                self.ingest_expression(b, &par.expr);
+            }
             Expr::JSXMember(_) => {
                 unimplemented!()
             }
@@ -800,58 +512,31 @@ impl JsEngine {
         unimplemented!()
     }
 
-    fn ingest_function(&'a self, scopes: &mut ScopeLookup, function: &Function) -> FnOpRepr {
-        return Box::new(move |function: &Function| {
-            if !function.decorators.is_empty() {
-                panic!("decorators (@) unimplemented!")
+    fn ingest_function(&self, b: &mut OpBuilder, function: &Function) -> FnOpRepr {
+        if !function.decorators.is_empty() {
+            panic!("decorators (@) unimplemented!")
+        }
+
+        b.func(|b| {
+            for (i, param) in function.params.iter().enumerate() {
+                self.ingest_assignment(b, &param.pat, |b| {
+                    let args = b.args();
+                    b.deref(
+                        |b| b.var_r_t(args),
+                        |b| {
+                            b.literal(u_number(i as f64));
+                        },
+                    );
+                });
             }
-
-            // TODO |   uh boy... can't wait to implement the proper engine parts...
-            // TODO |   this is about as safe & reasonable as cuddling a lion:
-            // TODO |   Can go well, but won't always and when it does not the owner (me)
-            // TODO |   has some explaining to do...
-            let function: &'static Function = unsafe { std::mem::transmute(function) };
-            let mut self_: &'static mut Self = unsafe { std::mem::transmute(self) };
-
-            u_literal(
-                JsObjectBuilder::new(None)
-                    .with_callable(JSCallable::Js {
-                        content: Rc::new("TODO".to_string()),
-                        // TODO capturing function by ref is not safe here - will be sorted out when we separate AST and engine state
-                        creator: Gc::from(JsFn::new(
-                            (scopes,),
-                            move |(scopes,), ret, args, this| {
-                                let scopes = ScopeLookup::new(Some(&scopes));
-                                let mut setup = Vec::new();
-                                for (i, par) in function.params.iter().enumerate() {
-                                    setup.push(self_.ingest_assignment(scopes)(
-                                        &par.pat,
-                                        u_deref(
-                                            u_literal(args.clone()),
-                                            u_literal(u_string(&i.to_string())),
-                                        ),
-                                        true,
-                                    ));
-                                }
-                                if let Some(body) = &function.body {
-                                    for stmt in &body.stmts {
-                                        setup.push(self_.ingest_statement(scopes)(stmt))
-                                    }
-                                }
-                                StackFrame {
-                                    vars: vec![], // TODO
-                                    remaining_ops: setup,
-                                    this,
-                                    ret_store: ret,
-                                }
-                            },
-                        )),
-                    })
-                    .build(),
-            );
-
-            unimplemented!()
+            for stmt in &function.body {
+                for stmt in &stmt.stmts {
+                    self.ingest_statement(b, stmt);
+                }
+            }
         });
+
+        unimplemented!()
     }
 }
 
@@ -868,20 +553,18 @@ impl Write for TempFix {
 }
 
 pub fn m1() {
-    println!("Running\na = 'Hello Wonderful World!'; console.log(a)\n(hand compiled)\n");
-    let demo_fn = build_demo_fn();
+    println!("Running small test program\n");
     let mut engine_state = EngineState {
         tick_queue: vec![],
         external_calls: Arc::new(Mutex::new(vec![])),
     };
-    engine_state.get_queuer().enqueue_js_fn(demo_fn);
     let consumed = engine_state.run_queue(100000000);
     println!("\nConsumed: {}", consumed);
     let cm: Lrc<SourceMap> = Default::default();
     let handler = Handler::with_emitter(true, false, Box::new(Empty {}));
     let fm = cm.new_source_file(
         FileName::Custom("test.js".into()),
-        "function foo() {}".into(),
+        "console.log('Hello World')".into(),
     );
     let lexer = Lexer::new(
         Syntax::Es(Default::default()),
@@ -895,8 +578,20 @@ pub fn m1() {
         e.into_diagnostic(&handler).emit();
     }
 
-    let _module = parser
+    let module = parser
         .parse_module()
         .map_err(|err| err.into_diagnostic(&handler).emit())
         .unwrap();
+
+    let mut engine = JsEngine {
+        eng: Box::new(JsEngineInternal {
+            max_mem: 10000,
+            cur_mem: Default::default(),
+            state: engine_state,
+        }),
+    };
+    let module = engine.ingest_code(module);
+    engine.eng.state.get_queuer().enqueue_js_fn(module);
+
+    engine.eng.state.run_queue(1000);
 }

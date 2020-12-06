@@ -9,10 +9,8 @@
 }*/
 
 use crate::js::data::gc_util::GcDestr;
-use crate::js::data::js_execution::{FnOpRepr, JsVar, StackFrame, VarAlloc};
-use crate::js::data::util::{
-    s_pool, u_call, u_call_simple, u_literal, u_undefined, JsObjectBuilder,
-};
+use crate::js::data::js_execution::{FnOpRepr, JsVar, NativeFunction, VarAlloc};
+use crate::js::data::util::{s_pool, u_undefined};
 use gc::{BorrowMutError, Finalize, Gc, GcCell, GcCellRefMut, Trace};
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
@@ -76,7 +74,7 @@ pub enum JSCallable {
         creator: Gc<JsFn>,
     },
     Native {
-        creator: Gc<JsFn>,
+        op: Rc<dyn NativeFunction>,
     },
 }
 

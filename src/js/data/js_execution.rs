@@ -1,11 +1,7 @@
 use crate::js::data::js_execution::FnOp::Throw;
 use crate::js::data::js_execution::VarAlloc::CapturedAt;
 use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsProperty, JsValue};
-use crate::js::data::util::{
-    s_pool, u_array_e, u_block, u_bool, u_call, u_capture_deref, u_deref, u_function, u_if,
-    u_if_else, u_literal, u_load_global, u_not, u_number, u_read_var, u_strict_comp, u_string,
-    u_typeof, u_undefined, u_write_var, JsObjectBuilder,
-};
+use crate::js::data::util::{s_pool, u_bool, u_number, u_string, u_undefined, JsObjectBuilder};
 use gc::{Finalize, Trace};
 use gc::{Gc, GcCell};
 use std::cell::RefCell;
@@ -34,8 +30,37 @@ impl EngineQueuer {
             .queue
             .lock()
             .expect("Mutex poisoned. This is possibly an internal error.");
-        // TODO
-        unimplemented!()
+        guard.push(Box::new(|f| {
+            // todo
+            Gc::new(GcCell::new(AsyncStack {
+                stack: vec![
+                    StackElement::Value(u_undefined()),
+                    StackElement::Value(u_undefined()),
+                    StackElement::Value(val),
+                    StackElement::Op(FnOp::CallFunction {
+                        this: JsVar::Stack {
+                            pos: 0,
+                            name: Rc::new("".to_string()),
+                        },
+                        func: JsVar::Stack {
+                            pos: 2,
+                            name: Rc::new("".to_string()),
+                        },
+                        args: JsVar::Stack {
+                            pos: 1,
+                            name: Rc::new("".to_string()),
+                        },
+                        target: JsVar::Stack {
+                            pos: 0,
+                            name: Rc::new("".to_string()),
+                        },
+                    }),
+                ],
+                method_label: Identity::new(),
+                try_label: Identity::new(),
+                latest_fn_pos: 0,
+            }));
+        }));
     }
 }
 
@@ -93,6 +118,7 @@ pub struct AsyncStack {
     stack: Vec<StackElement>, // values first, ops second - otherwise we would run into a value while evaluating!
     method_label: Identity,
     try_label: Identity,
+    latest_fn_pos: usize, // not up to date, updated when max ticks runs out and used when started
 }
 
 enum AsyncStackResult {
@@ -102,7 +128,6 @@ enum AsyncStackResult {
 
 struct StackAccess<'a> {
     stack: &'a mut AsyncStack,
-    latest_fn_pos: usize, // Position of "this"
 }
 
 /**
@@ -121,7 +146,7 @@ impl<'a> StackAccess<'a> {
         // self.latest_fn_pos
         self.stack
             .stack
-            .get(pos + self.latest_fn_pos)
+            .get(pos + self.stack.latest_fn_pos)
             .expect("corrupt stack (3)")
     }
 
@@ -148,7 +173,7 @@ impl<'a> StackAccess<'a> {
 
     pub fn local_at(&mut self, pos: usize) -> JsVar {
         JsVar::Stack {
-            pos: self.latest_fn_pos + pos,
+            pos: self.stack.latest_fn_pos + pos,
             name: Rc::new("".to_string()),
         }
     }
@@ -166,21 +191,42 @@ impl<'a> StackAccess<'a> {
     }
 }
 
+struct LogFunction {
+    whatever: (),
+}
+
+impl Finalize for LogFunction {}
+
+unsafe impl Trace for LogFunction {
+    unsafe fn trace(&self) {}
+
+    unsafe fn root(&self) {}
+
+    unsafe fn unroot(&self) {}
+
+    fn finalize_glue(&self) {}
+}
+
+impl NativeFunction for LogFunction {
+    fn native_call(&self, this: JsValue, args: JsValue) -> Result<JsValue, JsValue> {
+        println!("{}", args.to_system_string());
+        Ok(u_undefined())
+    }
+}
+
 impl AsyncStack {
     fn run(&mut self, max: u64) -> (AsyncStackResult, u64) {
         let mut consumed = 0;
 
-        let mut access = StackAccess {
-            stack: self,
-            latest_fn_pos: 0,
-        };
+        let mut access = StackAccess { stack: self };
 
         loop {
             if consumed >= max {
+                self.latest_fn_pos = access.stack.latest_fn_pos; // TODO use reference for stack access
                 return (AsyncStackResult::Keep, consumed);
             }
 
-            if let Some(last) = self.stack.pop() {
+            if let Some(last) = access.stack.stack.pop() {
                 let stack_op = match last {
                     StackElement::Op(op) => op,
                     _ => {
@@ -194,8 +240,19 @@ impl AsyncStack {
                     FnOpAction::One(one) => self.stack.push(one),
                     FnOpAction::LoadGlobal { name, target } => {
                         if name.as_str() == "console" {
-                            target.set(Some(&mut access), u_undefined());
-                            // TODO
+                            target.set(
+                                Some(&mut access),
+                                JsObjectBuilder::new(None)
+                                    .with_prop(
+                                        s_pool("log"),
+                                        JsObjectBuilder::new(None)
+                                            .with_callable(JSCallable::Native {
+                                                op: Rc::new(LogFunction { whatever: () }),
+                                            })
+                                            .build(),
+                                    )
+                                    .build(),
+                            );
                         }
                     }
                     FnOpAction::LabelWalkback { id } => {
@@ -240,38 +297,24 @@ impl AsyncStack {
                         );
                     }
                     FnOpAction::Await { target, what } => {
+                        self.latest_fn_pos = access.stack.latest_fn_pos;
                         return (AsyncStackResult::Forget, consumed); // TODO await
                     }
                 };
                 consumed += 1;
             } else {
+                self.latest_fn_pos = access.stack.latest_fn_pos;
                 return (AsyncStackResult::Forget, consumed);
             }
         }
     }
 }
 
-pub fn build_demo_fn() -> JsValue {
-    let a = JsVar::new(Rc::new("a".into()));
-    return JsObjectBuilder::new(None)
-        .with_callable(JSCallable::Js {
-            content: Rc::new("".to_string()),
-            creator: Gc::new(JsFn::js_value_call(u_function(u_block(vec![
-                u_write_var(a.clone(), u_literal(u_string("heyho"))),
-                u_call(
-                    u_deref(u_load_global("console"), u_literal(u_string("log"))),
-                    u_read_var(a),
-                ),
-            ])))),
-        })
-        .build();
-}
-
 #[derive(Clone, Trace, Finalize)]
 pub enum VarAlloc {
     CapturedAt {
         name: Rc<String>,
-        from: Box::new(VarAlloc),
+        from: Box<VarAlloc>,
         target: usize,
     },
     LocalAt(Rc<String>, usize),
@@ -280,10 +323,20 @@ pub enum VarAlloc {
 
 impl VarAlloc {}
 
+pub trait NativeFunction: Trace + Finalize {
+    fn native_call(&self, this: JsValue, args: JsValue) -> Result<JsValue, JsValue>;
+}
+
 #[derive(Clone, Trace, Finalize)]
 pub enum FnOpRepr {
     LoadGlobal {
         name: Rc<String>,
+    },
+    NativeCall {
+        target: VarAlloc,
+        this: VarAlloc,
+        args: VarAlloc,
+        call: Rc<dyn NativeFunction>,
     },
     Assign {
         target: VarAlloc,
@@ -399,6 +452,7 @@ impl FnOpRepr {
                 stack.read_stack(*target).assume_capture()
             }
             VarAlloc::LocalAt(name, pos) => stack.local_at(*pos),
+            VarAlloc::Static(name, var) => var.clone(),
         };
         match op {
             FnOpRepr::LoadGlobal { name } => {
@@ -695,6 +749,19 @@ impl FnOpRepr {
                     target: store_at,
                 }))
             }
+            FnOpRepr::NativeCall {
+                target,
+                this,
+                args,
+                call,
+            } => {
+                into.push(StackElement::Op(FnOp::NativeCall {
+                    this: to_var(this),
+                    func: call.clone(),
+                    args: to_var(args),
+                    target: to_var(target),
+                }));
+            }
         }
     }
 }
@@ -736,6 +803,12 @@ pub enum FnOp {
     CallFunction {
         this: JsVar,
         func: JsVar,
+        args: JsVar,
+        target: JsVar,
+    },
+    NativeCall {
+        this: JsVar,
+        func: Rc<dyn NativeFunction>,
         args: JsVar,
         target: JsVar,
     },
@@ -1180,7 +1253,7 @@ impl FnOp {
                         content: Rc::new("".to_string()),
                         creator: Gc::new(JsFn {
                             ops: code,
-                            captures: captures.clone(),
+                            captures,
                         }),
                     })
                     .build();
@@ -1188,6 +1261,24 @@ impl FnOp {
                 FnOpAction::Nop
             }
             FnOp::Pop { n } => FnOpAction::Pop(n),
+            FnOp::NativeCall {
+                this,
+                func,
+                args,
+                target,
+            } => match func.native_call(this.get(Some(stack)), args.get(Some(stack))) {
+                Ok(r) => {
+                    target.set(Some(stack), r);
+                    FnOpAction::Nop
+                }
+                Err(err) => {
+                    let t_v = stack.make_local();
+                    t_v.set(Some(stack), err);
+                    FnOpAction::LabelWalkback {
+                        id: stack.try_label(),
+                    }
+                }
+            },
         };
     }
 }
