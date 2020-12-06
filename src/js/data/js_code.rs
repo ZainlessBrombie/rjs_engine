@@ -1,7 +1,7 @@
 extern crate swc_ecma_parser;
 use self::swc_ecma_parser::JscTarget;
 use crate::js::data::gc_util::GcDestr;
-use crate::js::data::js_execution::{build_demo_fn, EngineState, FnOpRepr, JsVar, StackFrame};
+use crate::js::data::js_execution::{build_demo_fn, EngineState, FnOpRepr, JsVar};
 use crate::js::data::js_types;
 use crate::js::data::js_types::{JSCallable, JsFn, JsNext, JsObj, JsValue};
 use crate::js::data::util::{

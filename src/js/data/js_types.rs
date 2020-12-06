@@ -9,7 +9,7 @@
 }*/
 
 use crate::js::data::gc_util::GcDestr;
-use crate::js::data::js_execution::{FnOpRepr, JsVar, StackFrame};
+use crate::js::data::js_execution::{FnOpRepr, JsVar, StackFrame, VarAlloc};
 use crate::js::data::util::{
     s_pool, u_call, u_call_simple, u_literal, u_undefined, JsObjectBuilder,
 };
@@ -60,93 +60,13 @@ pub fn next_err() -> Box<dyn JsNext> {
     Box::new(ErrNext {})
 }
 
+#[derive(Trace, Finalize, Clone)]
 pub struct JsFn {
-    builder: RefCell<
-        Box<
-            dyn FnMut(
-                /* ret */ JsVar,
-                /* args */ JsValue,
-                /* this */ JsValue,
-            ) -> StackFrame,
-        >,
-    >,
-    tracer: Box<dyn Trace>,
+    pub(crate) ops: Rc<FnOpRepr>,
+    pub(crate) captures: Rc<Vec<JsVar>>,
 }
 
-impl JsFn {
-    pub fn call(&self, ret: JsVar, args: JsValue, this: JsValue) -> StackFrame {
-        (self.builder.borrow_mut())(ret, args, this)
-    }
-
-    // todo for safety this should take an fn, not an Fn
-    pub fn new<
-        T: Trace + 'static,
-        F: Fn(&mut T, JsVar, JsValue, JsValue) -> StackFrame + 'static,
-    >(
-        data: T,
-        f: F,
-    ) -> JsFn {
-        let data = Rc::new(GcCell::new(data));
-        let mut data_copy = data.clone();
-        JsFn {
-            builder: RefCell::new(Box::new(move |var, args, this| {
-                f(GcCell::borrow_mut(&data_copy).deref_mut(), var, args, this)
-            })),
-            tracer: Box::new(data),
-        }
-    }
-
-    pub fn js_value_call(f: JsValue) -> JsFn {
-        JsFn::new(f, |d, var, args, this| StackFrame {
-            vars: vec![],
-            remaining_ops: vec![u_call_simple(u_literal(d.clone()))],
-            this, // TODO?
-            ret_store: var,
-        })
-    }
-
-    pub fn simple_call<
-        T: Trace + 'static,
-        F: Fn(&T, JsValue) -> Result<JsValue, JsValue> + 'static,
-    >(
-        data: T,
-        f: F,
-    ) -> JsFn {
-        return JsFn::new(data, move |data, var, args, this| StackFrame {
-            vars: vec![],
-            remaining_ops: vec![GcDestr::new(match f(data, args) {
-                Ok(value) => FnOpRepr::Return {
-                    what: Box::new(GcDestr::new(FnOpRepr::LoadStatic { value })),
-                },
-                Err(err) => FnOpRepr::Throw {
-                    what: Box::from(GcDestr::new(FnOpRepr::LoadStatic { value: err })),
-                },
-            })],
-            this,
-            ret_store: var,
-        });
-    }
-}
-
-impl Finalize for JsFn {}
-
-unsafe impl Trace for JsFn {
-    unsafe fn trace(&self) {
-        self.tracer.trace();
-    }
-
-    unsafe fn root(&self) {
-        self.tracer.trace();
-    }
-
-    unsafe fn unroot(&self) {
-        self.tracer.unroot();
-    }
-
-    fn finalize_glue(&self) {
-        self.tracer.finalize_glue();
-    }
-}
+impl JsFn {}
 
 #[derive(Trace, Finalize, Clone)]
 pub enum JSCallable {
@@ -194,6 +114,15 @@ pub enum JsValue {
     Boolean(bool),
     String(Rc<String>),
     Object(Gc<GcCell<JsObj>>),
+}
+
+impl JsValue {
+    pub fn is_symbol(&self) -> bool {
+        match self {
+            JsValue::Object(o) => o.borrow().is_symbol,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Trace, Finalize)]
@@ -250,9 +179,9 @@ pub struct JsObj {
 }
 
 impl JsObj {
-    pub fn get_prop(&self, k: Rc<String>) -> JsValue {
+    pub fn get_prop(&self, k: &Rc<String>) -> JsValue {
         self.content
-            .get(&k)
+            .get(k)
             .map(|prop| &prop.value)
             .unwrap_or(&JsValue::Undefined)
             .clone()
