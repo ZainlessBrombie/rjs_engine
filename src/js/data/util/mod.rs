@@ -646,22 +646,23 @@ impl OpBuilder {
     }
 }
 
+#[macro_export]
 macro_rules! js_val {
-    (undefined) => {{
+    (undefined) => {(|b: OpBuilder| {
         b.literal(u_undefined());
-    }};
-    (null) => {{
+    })};
+    (null) => {(|b: OpBuilder| {
         b.literal(u_null());
-    }};
-    (s:$lit:literal) => {{
+    })};
+    (s:$lit:literal) => {(|b: OpBuilder| {
         b.literal(u_string($lit));
-    }};
-    (n:$lit:literal) => {{
+    })};
+    (n:$lit:literal) => {(|b: OpBuilder| {
         b.literal(u_number($lit));
-    }};
+    })};
     (o:{
-        $([$index:block]: $value:block)*
-    }) => {{
+        $([$index:expr]: $value:expr)*
+    }) => {(|b: OpBuilder| {
         let temp = b.var_t();
         b.var_w_t(temp.clone(), |b| {
             b.obj_e();
@@ -670,15 +671,15 @@ macro_rules! js_val {
             b.assign_ref(|b| {
                 b.var_r_t();
             }, |b| {
-                $index
+                $index(b);
             }, |b| {
-                $value
+                $value(b);
             });
         )*
-        b:var_r_t(temp);
-    }};
-    (a: [$($el:block),*]) => {
-        {
+        b.var_r_t(temp);
+    })};
+    (a: [$($el:expr),*]) => {
+        (|b: OpBuilder| {
             let temp = b.var_t();
             b.var_w_t(temp.clone(), |b| {b.arr_e();});
             let mut counter = 0.0;
@@ -688,31 +689,34 @@ macro_rules! js_val {
                 }, |b| {
                     js_number!(counter);
                 }, |b| {
-                    $el
+                    $el(b);
                 });
             )*
             b.var_r_t(temp);
-        }
+        })
     };
 }
 
+#[macro_export]
 macro_rules! js_var {
-    ($left:literal = $right:block) => {
-        b.var_w(Rc::new($left), |b| {
-            $right;
-        });
+    ($left:literal = $right:expr) => {
+        (|b: OpBuilder| {
+            b.var_w(Rc::new($left), |b| {
+                $right(b);
+            });
+        })
     };
-    ($left:ident = $right:block) => {{
+    ($left:ident = $right:expr) => {(|b: OpBuilder| {
         b.var_w(Rc::new(stringify!($left).to_string()), |b| {
             $right;
         });
-    }};
-    ($left:block$([$index:block])+[$other:block] = $right:block) => {{
+    })};
+    (($left:expr)$([$index:expr])+[$other:expr] = $right:expr) => {(|b: OpBuilder| {
         b.assign_ref(|b| {
             js_index!($left $([$index])+)
         }, |b| {$other}, |b| {$right});
-    }};
-    ($left:block[$other:block] = $right:block) => {{
+    })};
+    (($left:expr)[$other:expr] = $right:expr) => {(|b: OpBuilder| {
         b.assign_ref(|b| {
             $left
         }, |b| {
@@ -720,76 +724,124 @@ macro_rules! js_var {
         }, |b| {
             $right
         });
-    }}
+    })}
 }
 
+#[macro_export]
 macro_rules! js_if {
-        [($cond:block) {$($st:block)*}] => {
-            b.ifb(|b| {
+        [($cond:expr) {$($st:expr)*}] => {
+            (|b: OpBuilder| {b.ifb(|b| {
                 $cond
             }, |b| {
                 $($st)*
-            });
+            });})
         };
 }
 
+#[macro_export]
 macro_rules! js_if_else {
-    (($cond:block) {$($ist:block)*} else {$($est:block)*}) => {
-            b.if_elseb(|b| {
+    (($cond:expr) {$($ist:expr)*} else {$($est:expr)*}) => {
+            (|b: OpBuilder| {b.if_elseb(|b| {
                 $cond
             }, |b| {
                 $($ist)*
             }, |b| {
                 $($est)*
-            });
+            });})
     };
 }
 
+#[macro_export]
 macro_rules! js_this {
-    () => {{
-        b.var_r_t(b.this());
-    }};
+    () => {
+        (|b: OpBuilder| {
+            b.var_r_t(b.this());
+        })
+    };
 }
 
+#[macro_export]
 macro_rules! js_args {
-    () => {{
-        b.var_r_t(b.args());
-    }};
+    () => {
+        (|b: OpBuilder| {
+            b.var_r_t(b.args());
+        })
+    };
 }
 
 // TODO should "this" be a Fn too?
+#[macro_export]
 macro_rules! js_call {
-    ($what:block(this: $this:ident, args: $args:block)) => {{
-        b.call($this.clone(), |b| $args);
-    }};
-}
-
-macro_rules! js_undefined {
-    () => {{
-        b.literal(u_undefined());
-    }};
-}
-
-macro_rules! js_number {
-    ($n:literal) => {{
-        b.literal(u_number($n as f64));
-    }};
-    ($n:ident) => {{
-        b.literal(u_number($n as f64));
-    }};
-}
-
-macro_rules! js_index {
-    ($of:block$([$index:block])+[$other:block]) => {
-        {b.deref(|b| {js_index($of$([$index])+)}, |b| {$other});}
+    (($what:expr)(this: $this:ident, args: $args:expr)) => {
+        (|b: OpBuilder| {
+            b.call($this.clone(), |b| $args);
+        })
     };
-    ($of:block[$index:block]) => {
-        {{b.deref(|b| {$index}, |b| {$other});}}
+}
+
+#[macro_export]
+macro_rules! js_undefined {
+    () => {
+        (|b: OpBuilder| {
+            b.literal(u_undefined());
+        })
+    };
+}
+
+#[macro_export]
+macro_rules! js_number {
+    ($n:literal) => {
+        (|b: OpBuilder| {
+            b.literal(u_number($n as f64));
+        })
+    };
+    ($n:ident) => {
+        (|b: OpBuilder| {
+            b.literal(u_number($n as f64));
+        })
+    };
+}
+
+#[macro_export]
+macro_rules! js_index {
+    (($of:expr) $([$index:expr])+[$other:expr]) => {
+        {b.deref(|b| {js_index($of$([$index(b)])+)}, |b| {$other(b)});}
+    };
+    (($of:expr)[$index:expr]) => {
+        {{b.deref(|b| {$of(b)}, |b| {$index(b)});}}
     }
 }
 
+#[macro_export]
+macro_rules! js_native {
+    (function ($this:ident, $args:ident) {$($content:expr;)*}) => {
+        (|b: OpBuilder| {JsObjectBuilder::new(None)
+            .with_callable(JSCallable::Native {
+                op: Rc::new(|$this, $args| {
+
+                    $($content;)*
+
+                    #[allow(unreachable_code)]
+                    return Ok(u_undefined());
+                }),
+            })
+            .build();})
+    };
+}
+
+#[macro_export]
+macro_rules! js_function {
+    {$($body:expr)*} => {
+        (|b| {
+            b.func(|b| {
+                $($body(b);)*
+            });
+        })
+    };
+}
+
 fn temp() {
-    OpBuilder::start().c
+    //OpBuilder::start().func()
 }
 
 pub enum VType {

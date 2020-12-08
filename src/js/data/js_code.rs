@@ -20,6 +20,8 @@ use swc_ecma_ast::{
     PatOrExpr, PropName, Stmt, VarDecl, VarDeclOrExpr,
 };
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax};
+#[macro_use]
+use crate::*;
 
 struct Empty {}
 
@@ -45,17 +47,6 @@ struct JsEngineInternal {
     state: EngineState,
 }
 
-#[derive(Mark)]
-struct LogFunction {}
-
-impl NativeFunction for LogFunction {
-    fn native_call(&self, _this: JsValue, args: JsValue) -> Result<JsValue, JsValue> {
-        println!("Printing...");
-        println!("{}", args.to_system_string());
-        Ok(u_undefined())
-    }
-}
-
 impl JsEngine {
     pub fn new() -> JsEngine {
         return JsEngine {
@@ -73,20 +64,20 @@ impl JsEngine {
     /// Returns a JsValue that represents a function. when it is called, the module is executed and returned by the function.
     pub fn ingest_code(&self, mut module: Module) -> JsValue {
         let mut b = OpBuilder::start();
-        b.var_w(s_pool("console"), |b| {
-            b.literal(
-                JsObjectBuilder::new(None)
-                    .with_prop(
-                        s_pool("log"),
-                        JsObjectBuilder::new(None)
-                            .with_callable(JSCallable::Native {
-                                op: Rc::new(LogFunction {}),
-                            })
-                            .build(),
-                    )
-                    .build(),
-            );
-        });
+        js_var!("console" =
+            js_val!(o: {
+                ["log"]: js_native! (function (this, args) {
+                    println!("{}", args.to_system_string());
+                })
+            })
+        )(b);
+        
+        js_var!("Array" =
+            js_val!(o: {
+                ["push"]: js
+            })
+        );
+
         b.var_w(s_pool("Array"), |b| {
             let tv = b.var_t();
             b.var_w_t(tv.clone(), |b| {

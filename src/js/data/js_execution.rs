@@ -342,9 +342,7 @@ pub enum VarAlloc {
 
 impl VarAlloc {}
 
-pub trait NativeFunction: Mark {
-    fn native_call(&self, this: JsValue, args: JsValue) -> Result<JsValue, JsValue>;
-}
+pub trait NativeFunction: Mark + Fn(JsValue, JsValue) -> Result<JsValue, JsValue> {}
 
 impl Debug for dyn NativeFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
