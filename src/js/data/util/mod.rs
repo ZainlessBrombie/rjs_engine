@@ -192,6 +192,7 @@ impl ScopeLookup {
     pub fn get(this: &Scope, name: &Rc<String>, heaped: bool) -> Option<VarAlloc> {
         let ret = RefCell::borrow_mut(this).cur.get(name).map(|r| {
             if heaped {
+                // TODO no need to capture globals?
                 return VarAlloc::CapturedAt {
                     name: name.clone(),
                     from: Box::new(r.clone()),
@@ -201,7 +202,7 @@ impl ScopeLookup {
             r.clone()
         });
         let mut ret = ret.or_else(|| {
-            let this = RefCell::borrow(this);
+            let this = RefCell::borrow_mut(this);
             this.prev.as_ref().map_or(None, |p| {
                 if heaped {
                     Sl::get(p, name, false).map(|source| {
@@ -213,7 +214,6 @@ impl ScopeLookup {
                     })
                 } else {
                     ScopeLookup::get(&p, &name, this.heap_break)
-                    // TODO possibly incorrect
                 }
             })
         });
@@ -221,7 +221,8 @@ impl ScopeLookup {
             if let VarAlloc::CapturedAt { target, .. } = ret {
                 let mut this = RefCell::borrow_mut(this);
                 this.local_counter += 1;
-                *target = this.local_counter - 1;
+                *target = this.local_counter - 1; // TODO what about captures in loops?
+                this.cur.insert(name.clone(), ret.clone());
             }
         }
         return ret;
@@ -695,7 +696,9 @@ macro_rules! js_primitive {
 #[macro_export]
 macro_rules! prim_to_val {
     ($what:ident) => {
-        (|b: &mut OpBuilder| b.literal(js_primitive!($what)))
+        (|b: &mut OpBuilder| {
+            b.literal(js_primitive!($what));
+        })
     };
     ($what:literal) => {
         (|b: &mut OpBuilder| {
@@ -754,9 +757,9 @@ macro_rules! js_val {
             b.assign_ref(|b| {
                 b.var_r_t(temp.clone());
             }, |b| {
-                prim_to_val!($index(b));
+                prim_to_val!($index)(b);
             }, |b| {
-                prim_to_val!($value(b));
+                prim_to_val!($value)(b);
             });
         )*
         b.var_r_t(temp);
@@ -848,7 +851,8 @@ macro_rules! js_this {
 macro_rules! js_args {
     () => {
         (|b: &mut OpBuilder| {
-            b.var_r_t(b.args());
+            let temp = b.args();
+            b.var_r_t(temp);
         })
     };
 }
@@ -903,7 +907,8 @@ macro_rules! js_native {
     (function ($this:ident, $args:ident) {$($content:expr;)*}) => {
         (|b: &mut OpBuilder| {
                 use crate::js::data::js_execution::native_from;
-                JsObjectBuilder::new(None)
+                #[allow(unused_variables)]
+                b.literal(JsObjectBuilder::new(None)
                     .with_callable(JSCallable::Native {
                         op: native_from(|$this, $args| {
 
@@ -913,7 +918,7 @@ macro_rules! js_native {
                             return Ok(u_undefined());
                         }),
                     })
-                    .build();
+                    .build());
             })
     };
 }
@@ -929,26 +934,33 @@ macro_rules! js_function {
     };
 }
 
+#[macro_export]
+macro_rules! js_rvar {
+    ($name:literal) => {
+        (|b: &mut OpBuilder| {
+            b.var_r(Rc::new($name.to_string()));
+        })
+    };
+}
+
+#[macro_export]
+macro_rules! js_num_add {
+    (($left:expr) + ($right:expr)) => {
+        (|b: &mut OpBuilder| {
+            b.numeral_add(
+                |b| {
+                    $left(b);
+                },
+                |b| {
+                    $right(b);
+                },
+            );
+        })
+    };
+}
+
 fn temp() {
-    //OpBuilder::start().func()
-    trait ToJs {
-        fn to_js(&self) -> JsValue;
-    }
-    impl ToJs for String {
-        fn to_js(&self) -> JsValue {
-            u_string(self)
-        }
-    }
-    impl ToJs for &str {
-        fn to_js(&self) -> JsValue {
-            u_string(self)
-        }
-    }
-    impl ToJs for f64 {
-        fn to_js(&self) -> JsValue {
-            u_number(*self)
-        }
-    }
+    //OpBuilder::start().num
 }
 
 pub enum VType {

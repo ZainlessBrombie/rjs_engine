@@ -4,6 +4,7 @@ use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsProperty, JsValue}
 use crate::js::data::util::{s_pool, u_bool, u_number, u_string, u_undefined, JsObjectBuilder};
 use safe_gc::Mark;
 use safe_gc::{Gc, GcCell};
+use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::f64::NAN;
 use std::fmt::{Debug, Formatter};
@@ -199,6 +200,10 @@ impl<'a> StackAccess<'a> {
             .stack
             .get_mut(pos + self.stack.latest_fn_pos)
             .expect("corrupt stack (4)")
+    }
+
+    pub fn write_stack_value(&'a mut self, pos: usize, el: StackElement) {
+        *self.write_stack(pos) = el;
     }
 
     pub fn write_stack_absolute(&mut self, pos: usize) -> &mut StackElement {
@@ -798,8 +803,27 @@ impl FnOpRepr {
                 is_array: *is_array,
             })),
             FnOpRepr::InstantiateFunction { vars, code } => {
+                let captures = Rc::new(
+                    vars.iter()
+                        .map(|va| {
+                            unsafe {
+                                match va {
+                                    VarAlloc::CapturedAt { from, target, .. } => {
+                                        let element = StackElement::HeapVar(to_var(stack, from));
+                                        // TODO I think this is a compiler bug...
+                                        let stack: &mut StackAccess =
+                                            std::mem::transmute(stack as *const StackAccess);
+                                        stack.write_stack_value(*target, element);
+                                    }
+                                    _ => panic!("Capture was not a capture?..."),
+                                };
+                            }
+                            to_var(stack, va)
+                        })
+                        .collect(),
+                );
                 into.push(StackElement::Op(FnOp::CreateFunction {
-                    captures: Rc::new(vars.iter().map(|va| to_var(stack, va)).collect()), // TODO straight to stack?
+                    captures, // TODO straight to stack?
                     code: code.clone(),
                     target: store_at,
                 }))
@@ -990,6 +1014,12 @@ impl FnOp {
                     JsValue::Object(obj) => match &obj.borrow().borrow_mut().call {
                         JSCallable::NotCallable => { /*TODO*/ }
                         JSCallable::Js { creator, .. } => {
+                            let borrow = creator.borrow();
+                            let captures = borrow
+                                .captures
+                                .iter()
+                                .map(|captured| StackElement::HeapVar(captured.clone()));
+                            result.extend(captures);
                             result.push(StackElement::Op(FnOp::Expand {
                                 what: creator.borrow().ops.clone(),
                             }));

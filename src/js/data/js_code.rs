@@ -6,6 +6,7 @@ use crate::js::data::util::{
     s_pool, u_bool, u_null, u_number, u_string, u_true, u_undefined, JsObjectBuilder, OpBuilder,
     VType,
 };
+use crate::*;
 use safe_gc::{GcCell, Mark};
 use std::io::Write;
 use std::ops::Deref;
@@ -20,8 +21,6 @@ use swc_ecma_ast::{
     PatOrExpr, PropName, Stmt, VarDecl, VarDeclOrExpr,
 };
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax};
-#[macro_use]
-use crate::*;
 
 struct Empty {}
 
@@ -66,7 +65,7 @@ impl JsEngine {
         let mut b = OpBuilder::start();
         js_var!(
             "console" = js_val!(o: {
-                [js_val!("console")]: js_native! (function (this, args) {
+                [js_val!("log")]: js_native! (function (this, args) {
                     println!("{}", args.to_system_string());
                 })
             })
@@ -75,91 +74,16 @@ impl JsEngine {
         js_var!(
             "Array" = js_val!(o: {
                 [js_val!("push")]: js_function! {
+                    js_var!("len" = js_prop!(( {js_this!()} )["length"]))
                     js_var!(
-                    (js_this!())[js_prop!(( {js_this!()} )["length"])]
-                        = js_this!()
+                    (js_this!())[js_rvar!("len")]
+                        = js_prop!((js_args!())[js_val!("0")])
                     )
+
+                    js_var!((js_this!())[js_val!("length")] = js_num_add!((js_val!(1.0)) + (js_rvar!("len"))))
                 }
             })
-        );
-
-        b.var_w(s_pool("Array"), |b| {
-            let tv = b.var_t();
-            b.var_w_t(tv.clone(), |b| {
-                b.obj_e();
-            });
-
-            // Assign push
-            b.assign_ref(
-                |b| b.var_r_t(tv.clone()),
-                |b| {
-                    b.literal(u_string("push"));
-                },
-                |b| {
-                    // Push Fn
-                    b.func(|b| {
-                        // Get current length
-                        let len = b.var_t();
-                        b.var_w_t(len.clone(), |b| {
-                            b.deref(
-                                |b| {
-                                    let this = b.this();
-                                    b.var_r_t(this);
-                                },
-                                |b| {
-                                    b.literal(u_string("length"));
-                                },
-                            );
-                        });
-                        b.var_w_t(len.clone(), |b| {
-                            b.literal(u_number(0.0));
-                        });
-                        // Getting length done
-
-                        // Assigning args[0] to this[this.length]
-                        let alloc = b.this();
-                        b.assign_ref(
-                            |b| b.var_r_t(alloc),
-                            |b| b.var_r_t(len.clone()),
-                            |b| {
-                                let alloc1 = b.args();
-                                b.deref(
-                                    |b| b.var_r_t(alloc1),
-                                    |b| {
-                                        b.literal(u_number(0.0));
-                                    },
-                                );
-                            },
-                        );
-
-                        b.assign_ref(
-                            |b| {
-                                let alloc2 = b.this();
-                                b.var_r_t(alloc2);
-                            },
-                            |b| {
-                                b.literal(u_string("length"));
-                            },
-                            |b| {
-                                b.numeral_add(
-                                    |b| {
-                                        b.var_r_t(len.clone());
-                                    },
-                                    |b| {
-                                        b.literal(u_number(1.0));
-                                    },
-                                );
-                            },
-                        );
-
-                        b.literal(u_undefined());
-                    });
-                    // End push Fn
-                },
-            );
-            // End assign push
-            b.var_r_t(tv);
-        });
+        )(&mut b);
 
         for mod_item in module.body.drain(..) {
             match &mod_item {
@@ -453,7 +377,7 @@ impl JsEngine {
                 self.ingest_function(b, &f.function);
             }
             Expr::Unary(_) => {}
-            Expr::Update(up) => {}
+            Expr::Update(_up) => {}
             Expr::Bin(bin) => match &bin.op {
                 BinaryOp::Add => {
                     b.numeral_add(
