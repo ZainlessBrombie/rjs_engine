@@ -1,5 +1,5 @@
 use crate::js::data::engine_constants::ConstantStrings;
-use crate::js::data::js_execution::{EngineQueuer, FnOpRepr, JsVar, VarAlloc};
+use crate::js::data::js_execution::{native_from, EngineQueuer, FnOpRepr, JsVar, VarAlloc};
 use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsObj, JsProperty, JsValue};
 use safe_gc::{Gc, GcCell};
 use std::borrow::BorrowMut;
@@ -647,39 +647,122 @@ impl OpBuilder {
 }
 
 #[macro_export]
+macro_rules! js_primitive {
+    ($what:ident) => {{
+        trait ToJs {
+            fn to_js(&self) -> JsValue;
+        }
+        impl ToJs for String {
+            fn to_js(&self) -> JsValue {
+                u_string(self)
+            }
+        }
+        impl ToJs for &str {
+            fn to_js(&self) -> JsValue {
+                u_string(self)
+            }
+        }
+        impl ToJs for f64 {
+            fn to_js(&self) -> JsValue {
+                u_number(*self)
+            }
+        }
+        ToJs::to_js(&$what)
+    }};
+    ($what:literal) => {{
+        trait ToJs {
+            fn to_js(&self) -> JsValue;
+        }
+        impl ToJs for String {
+            fn to_js(&self) -> JsValue {
+                u_string(self)
+            }
+        }
+        impl ToJs for &str {
+            fn to_js(&self) -> JsValue {
+                u_string(self)
+            }
+        }
+        impl ToJs for f64 {
+            fn to_js(&self) -> JsValue {
+                u_number(*self)
+            }
+        }
+        ToJs::to_js(&$what)
+    }};
+}
+
+#[macro_export]
+macro_rules! prim_to_val {
+    ($what:ident) => {
+        (|b: &mut OpBuilder| b.literal(js_primitive!($what)))
+    };
+    ($what:literal) => {
+        (|b: &mut OpBuilder| {
+            b.literal(js_primitive!($what));
+        })
+    };
+    ($what:expr) => {
+        $what
+    };
+}
+
+#[macro_export]
+macro_rules! js_prop {
+    (($from:expr)$([$key:expr])+[$key2:expr]) => {
+        (|b: &mut OpBuilder| {
+            b.deref(|b| {
+                js_prop!((prim_to_val!($from)(b))$([$key])+)(b);
+            }, |b| {
+                prim_to_val!($key2)(b);
+            });
+        })
+    };
+    (($from:expr)[$key2:expr]) => {
+        (|b: &mut OpBuilder| {
+            b.deref(|b| {
+                prim_to_val!($from)(b);
+            }, |b| {
+                prim_to_val!($key2)(b);
+            });
+        })
+    }
+}
+
+#[macro_export]
 macro_rules! js_val {
-    (undefined) => {(|b: OpBuilder| {
+    (undefined) => {(|b: &mut OpBuilder| {
         b.literal(u_undefined());
     })};
-    (null) => {(|b: OpBuilder| {
+    (null) => {(|b: &mut OpBuilder| {
         b.literal(u_null());
     })};
-    (s:$lit:literal) => {(|b: OpBuilder| {
-        b.literal(u_string($lit));
+    ($lit:literal) => {(|b: &mut OpBuilder| {
+        prim_to_val!($lit)(b);
     })};
-    (n:$lit:literal) => {(|b: OpBuilder| {
-        b.literal(u_number($lit));
+    ($lit:literal) => {(|b: &mut OpBuilder| {
+        prim_to_val!($lit)(b);
     })};
     (o:{
         $([$index:expr]: $value:expr)*
-    }) => {(|b: OpBuilder| {
+    }) => {(|b: &mut OpBuilder| {
         let temp = b.var_t();
         b.var_w_t(temp.clone(), |b| {
             b.obj_e();
         });
         $(
             b.assign_ref(|b| {
-                b.var_r_t();
+                b.var_r_t(temp.clone());
             }, |b| {
-                $index(b);
+                prim_to_val!($index(b));
             }, |b| {
-                $value(b);
+                prim_to_val!($value(b));
             });
         )*
         b.var_r_t(temp);
     })};
     (a: [$($el:expr),*]) => {
-        (|b: OpBuilder| {
+        (|b: &mut OpBuilder| {
             let temp = b.var_t();
             b.var_w_t(temp.clone(), |b| {b.arr_e();});
             let mut counter = 0.0;
@@ -700,29 +783,29 @@ macro_rules! js_val {
 #[macro_export]
 macro_rules! js_var {
     ($left:literal = $right:expr) => {
-        (|b: OpBuilder| {
-            b.var_w(Rc::new($left), |b| {
+        (|b: &mut OpBuilder| {
+            b.var_w(Rc::new($left.to_string()), |b| {
                 $right(b);
             });
         })
     };
-    ($left:ident = $right:expr) => {(|b: OpBuilder| {
+    ($left:ident = $right:expr) => {(|b: &mut OpBuilder| {
         b.var_w(Rc::new(stringify!($left).to_string()), |b| {
-            $right;
+            $right(b);
         });
     })};
-    (($left:expr)$([$index:expr])+[$other:expr] = $right:expr) => {(|b: OpBuilder| {
+    (($left:expr)$([$index:expr])+[$other:expr] = $right:expr) => {(|b: &mut OpBuilder| {
         b.assign_ref(|b| {
             js_index!($left $([$index])+)
-        }, |b| {$other}, |b| {$right});
+        }, |b| {$other(b);}, |b| {$right(b);});
     })};
-    (($left:expr)[$other:expr] = $right:expr) => {(|b: OpBuilder| {
+    (($left:expr)[$other:expr] = $right:expr) => {(|b: &mut OpBuilder| {
         b.assign_ref(|b| {
-            $left
+            $left(b);
         }, |b| {
-            $other
+            $other(b);
         }, |b| {
-            $right
+            $right(b);
         });
     })}
 }
@@ -730,10 +813,10 @@ macro_rules! js_var {
 #[macro_export]
 macro_rules! js_if {
         [($cond:expr) {$($st:expr)*}] => {
-            (|b: OpBuilder| {b.ifb(|b| {
-                $cond
+            (|b: &mut OpBuilder| {b.ifb(|b| {
+                $cond(b);
             }, |b| {
-                $($st)*
+                $($st(b);)*
             });})
         };
 }
@@ -741,12 +824,12 @@ macro_rules! js_if {
 #[macro_export]
 macro_rules! js_if_else {
     (($cond:expr) {$($ist:expr)*} else {$($est:expr)*}) => {
-            (|b: OpBuilder| {b.if_elseb(|b| {
-                $cond
+            (|b: &mut OpBuilder| {b.if_elseb(|b| {
+                $cond(b);
             }, |b| {
-                $($ist)*
+                $($ist(b);)*
             }, |b| {
-                $($est)*
+                $($est(b);)*
             });})
     };
 }
@@ -754,8 +837,9 @@ macro_rules! js_if_else {
 #[macro_export]
 macro_rules! js_this {
     () => {
-        (|b: OpBuilder| {
-            b.var_r_t(b.this());
+        (|b: &mut OpBuilder| {
+            let temp = b.this();
+            b.var_r_t(temp);
         })
     };
 }
@@ -763,7 +847,7 @@ macro_rules! js_this {
 #[macro_export]
 macro_rules! js_args {
     () => {
-        (|b: OpBuilder| {
+        (|b: &mut OpBuilder| {
             b.var_r_t(b.args());
         })
     };
@@ -773,8 +857,10 @@ macro_rules! js_args {
 #[macro_export]
 macro_rules! js_call {
     (($what:expr)(this: $this:ident, args: $args:expr)) => {
-        (|b: OpBuilder| {
-            b.call($this.clone(), |b| $args);
+        (|b: &mut OpBuilder| {
+            b.call($this.clone(), |b| {
+                $args(b);
+            });
         })
     };
 }
@@ -782,7 +868,7 @@ macro_rules! js_call {
 #[macro_export]
 macro_rules! js_undefined {
     () => {
-        (|b: OpBuilder| {
+        (|b: &mut OpBuilder| {
             b.literal(u_undefined());
         })
     };
@@ -791,12 +877,12 @@ macro_rules! js_undefined {
 #[macro_export]
 macro_rules! js_number {
     ($n:literal) => {
-        (|b: OpBuilder| {
+        (|b: &mut OpBuilder| {
             b.literal(u_number($n as f64));
         })
     };
     ($n:ident) => {
-        (|b: OpBuilder| {
+        (|b: &mut OpBuilder| {
             b.literal(u_number($n as f64));
         })
     };
@@ -815,24 +901,27 @@ macro_rules! js_index {
 #[macro_export]
 macro_rules! js_native {
     (function ($this:ident, $args:ident) {$($content:expr;)*}) => {
-        (|b: OpBuilder| {JsObjectBuilder::new(None)
-            .with_callable(JSCallable::Native {
-                op: Rc::new(|$this, $args| {
+        (|b: &mut OpBuilder| {
+                use crate::js::data::js_execution::native_from;
+                JsObjectBuilder::new(None)
+                    .with_callable(JSCallable::Native {
+                        op: native_from(|$this, $args| {
 
-                    $($content;)*
+                            $($content;)*
 
-                    #[allow(unreachable_code)]
-                    return Ok(u_undefined());
-                }),
+                            #[allow(unreachable_code)]
+                            return Ok(u_undefined());
+                        }),
+                    })
+                    .build();
             })
-            .build();})
     };
 }
 
 #[macro_export]
 macro_rules! js_function {
     {$($body:expr)*} => {
-        (|b| {
+        (|b: &mut OpBuilder| {
             b.func(|b| {
                 $($body(b);)*
             });
@@ -842,6 +931,24 @@ macro_rules! js_function {
 
 fn temp() {
     //OpBuilder::start().func()
+    trait ToJs {
+        fn to_js(&self) -> JsValue;
+    }
+    impl ToJs for String {
+        fn to_js(&self) -> JsValue {
+            u_string(self)
+        }
+    }
+    impl ToJs for &str {
+        fn to_js(&self) -> JsValue {
+            u_string(self)
+        }
+    }
+    impl ToJs for f64 {
+        fn to_js(&self) -> JsValue {
+            u_number(*self)
+        }
+    }
 }
 
 pub enum VType {

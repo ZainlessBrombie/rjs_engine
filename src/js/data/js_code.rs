@@ -64,17 +64,22 @@ impl JsEngine {
     /// Returns a JsValue that represents a function. when it is called, the module is executed and returned by the function.
     pub fn ingest_code(&self, mut module: Module) -> JsValue {
         let mut b = OpBuilder::start();
-        js_var!("console" =
-            js_val!(o: {
-                ["log"]: js_native! (function (this, args) {
+        js_var!(
+            "console" = js_val!(o: {
+                [js_val!("console")]: js_native! (function (this, args) {
                     println!("{}", args.to_system_string());
                 })
             })
-        )(b);
-        
-        js_var!("Array" =
-            js_val!(o: {
-                ["push"]: js
+        )(&mut b);
+
+        js_var!(
+            "Array" = js_val!(o: {
+                [js_val!("push")]: js_function! {
+                    js_var!(
+                    (js_this!())[js_prop!(( {js_this!()} )["length"])]
+                        = js_this!()
+                    )
+                }
             })
         );
 

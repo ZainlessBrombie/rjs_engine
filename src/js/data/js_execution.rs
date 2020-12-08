@@ -214,16 +214,6 @@ impl<'a> StackAccess<'a> {
     }
 }
 
-#[derive(Mark)]
-struct LogFunction {}
-
-impl NativeFunction for LogFunction {
-    fn native_call(&self, _this: JsValue, args: JsValue) -> Result<JsValue, JsValue> {
-        println!("{}", args.to_system_string());
-        Ok(u_undefined())
-    }
-}
-
 impl AsyncStack {
     fn run(&mut self, max: u64) -> (AsyncStackResult, u64) {
         let mut consumed = 0;
@@ -342,7 +332,37 @@ pub enum VarAlloc {
 
 impl VarAlloc {}
 
-pub trait NativeFunction: Mark + Fn(JsValue, JsValue) -> Result<JsValue, JsValue> {}
+pub trait NativeFunction: Mark {
+    fn call(&self, this: JsValue, args: JsValue) -> Result<JsValue, JsValue>;
+}
+
+pub fn native_from<F: 'static>(f: F) -> Rc<dyn NativeFunction>
+where
+    F: Fn(JsValue, JsValue) -> Result<JsValue, JsValue>,
+{
+    struct NativeImpl<F1: Fn(JsValue, JsValue) -> Result<JsValue, JsValue> + ?Sized> {
+        f: Rc<F1>,
+    }
+    impl<T: Fn(JsValue, JsValue) -> Result<JsValue, JsValue>> Mark for NativeImpl<T> {
+        fn mark_all(&self) {
+            unimplemented!()
+        }
+
+        fn unroot(&self) {
+            unimplemented!()
+        }
+
+        fn root(&self) {
+            unimplemented!()
+        }
+    }
+    impl<T: Fn(JsValue, JsValue) -> Result<JsValue, JsValue>> NativeFunction for NativeImpl<T> {
+        fn call(&self, this: JsValue, args: JsValue) -> Result<JsValue, JsValue> {
+            (self.f)(this, args)
+        }
+    }
+    Rc::new(NativeImpl { f: Rc::new(f) })
+}
 
 impl Debug for dyn NativeFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -978,7 +998,7 @@ impl FnOp {
                             }));
                         }
                         JSCallable::Native { op } => {
-                            match op.native_call(this.get(Some(stack)), args.get(Some(stack))) {
+                            match op.call(this.get(Some(stack)), args.get(Some(stack))) {
                                 Ok(ok) => {
                                     target.set(Some(stack), ok);
                                     return FnOpAction::Nop;
@@ -1373,7 +1393,7 @@ impl FnOp {
                 func,
                 args,
                 target,
-            } => match func.native_call(this.get(Some(stack)), args.get(Some(stack))) {
+            } => match func.call(this.get(Some(stack)), args.get(Some(stack))) {
                 Ok(r) => {
                     target.set(Some(stack), r);
                     FnOpAction::Nop

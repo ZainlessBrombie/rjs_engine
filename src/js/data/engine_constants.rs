@@ -31,7 +31,6 @@ fn build_symbol(name: Rc<String>, strings: &ConstantStrings, sym_proto: JsValue)
         .build();
 }
 
-#[derive(Mark)]
 struct SymbolBuilder {}
 
 impl EngineConstants {
@@ -45,10 +44,24 @@ impl EngineConstants {
         let strings_clone = strings.clone();
 
         impl NativeFunction for SymbolBuilder {
-            fn native_call(&self, _this: JsValue, _args: JsValue) -> Result<JsValue, JsValue> {
+            fn call(&self, _this: JsValue, _args: JsValue) -> Result<JsValue, JsValue> {
                 Ok(JsObjectBuilder::new(None).with_being_symbol().build())
             }
         }
+        impl Mark for SymbolBuilder {
+            fn mark_all(&self) {
+                unimplemented!()
+            }
+
+            fn unroot(&self) {
+                unimplemented!()
+            }
+
+            fn root(&self) {
+                unimplemented!()
+            }
+        }
+
         let symbol_constr = JsObjectBuilder::new(Some(&strings))
             .with_callable(JSCallable::Native {
                 op: Rc::new(SymbolBuilder {}),
