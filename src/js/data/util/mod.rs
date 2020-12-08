@@ -174,7 +174,7 @@ impl ScopeLookup {
         Rc::new(RefCell::new(ScopeLookup {
             cur: Default::default(),
             prev: Some(this.clone()),
-            local_counter: 2,
+            local_counter: 3,
             heap_break,
         }))
     }

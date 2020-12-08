@@ -235,11 +235,11 @@ impl AsyncStack {
             }
 
             if let Some(last) = access.stack.stack.pop() {
-                //println!("\n{:?}\n", last);
+                println!("\n{:?}\n", last);
                 for (i, x) in access.stack.stack.iter().enumerate() {
-                    //println!("{}: {:?}", i, x)
+                    println!("{}: {:?}", i, x)
                 }
-                //println!("-----------\n");
+                println!("-----------\n");
                 let stack_op = match last {
                     // TODO by value
                     StackElement::Op(op) => op,
