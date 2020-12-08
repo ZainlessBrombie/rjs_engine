@@ -1,4 +1,4 @@
-pub mod EngineConstants;
+pub mod engine_constants;
 pub mod gc_util;
 pub mod js_code;
 pub mod js_execution;

@@ -8,19 +8,17 @@
     fn type_of(&self) -> dyn JsValue;
 }*/
 
-use crate::js::data::gc_util::GcDestr;
-use crate::js::data::js_execution::{FnOpRepr, JsVar, NativeFunction, VarAlloc};
+use crate::js::data::js_execution::{FnOpRepr, JsVar, NativeFunction};
 use crate::js::data::util::{s_pool, u_undefined};
-use gc::{BorrowMutError, Finalize, Gc, GcCell, GcCellRefMut, Trace};
-use std::borrow::BorrowMut;
-use std::cell::RefCell;
+use safe_gc::{Gc, GcCell, Mark};
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
+use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(Trace, Finalize)]
+#[derive(Mark)]
 pub struct JsProperty {
     pub enumerable: bool,
     pub configurable: bool,
@@ -58,7 +56,7 @@ pub fn next_err() -> Box<dyn JsNext> {
     Box::new(ErrNext {})
 }
 
-#[derive(Trace, Finalize, Clone)]
+#[derive(Mark, Clone)]
 pub struct JsFn {
     pub(crate) ops: Rc<FnOpRepr>,
     pub(crate) captures: Rc<Vec<JsVar>>,
@@ -66,7 +64,7 @@ pub struct JsFn {
 
 impl JsFn {}
 
-#[derive(Trace, Finalize, Clone)]
+#[derive(Mark, Clone)]
 pub enum JSCallable {
     NotCallable,
     Js {
@@ -78,33 +76,32 @@ pub enum JSCallable {
     },
 }
 
-#[derive(Trace, Finalize, Clone)]
-pub struct Identity(Rc<u64>); // Note: Name ist stored in object
+static IDENTITY_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Mark, Clone, Debug)]
+pub struct Identity(u64); // Note: Name ist stored in object
 
 impl Identity {
     pub fn new() -> Identity {
-        return Identity(Rc::new(rand::random()));
+        return Identity(IDENTITY_COUNTER.fetch_add(1, Ordering::Relaxed));
     }
 }
 
 impl Hash for Identity {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u64(*Rc::deref(&self.0))
+        state.write_u64(self.0)
     }
 }
 
 impl PartialEq for Identity {
     fn eq(&self, other: &Self) -> bool {
-        let us_loc: &u64 = Rc::deref(&self.0);
-        let other_loc: &u64 = Rc::as_ref(&other.0);
-
-        return (us_loc as *const u64) == (other_loc as *const u64);
+        return self.0 == other.0;
     }
 }
 
 impl Eq for Identity {}
 
-#[derive(Trace, Finalize, Clone)]
+#[derive(Mark, Clone, Debug)]
 pub enum JsValue {
     Undefined,
     Null,
@@ -117,13 +114,13 @@ pub enum JsValue {
 impl JsValue {
     pub fn is_symbol(&self) -> bool {
         match self {
-            JsValue::Object(o) => o.borrow().is_symbol,
+            JsValue::Object(o) => o.borrow().borrow().is_symbol,
             _ => false,
         }
     }
 }
 
-#[derive(Trace, Finalize)]
+#[derive(Mark)]
 pub struct InsertOrderMap<K: Hash + Eq, V> {
     counter: u64,
     map: HashMap<K, (u64, V)>,
@@ -166,7 +163,7 @@ impl<K: Hash + Eq, V> InsertOrderMap<K, V> {
     }
 }
 
-#[derive(Trace, Finalize)]
+#[derive(Mark)]
 pub struct JsObj {
     pub(crate) is_array: bool,
     pub(crate) content: InsertOrderMap<Rc<String>, JsProperty>,
@@ -174,6 +171,12 @@ pub struct JsObj {
     pub(crate) call: JSCallable,
     pub(crate) identity: Identity,
     pub(crate) is_symbol: bool,
+}
+
+impl Debug for JsObj {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[object Object]")
+    }
 }
 
 impl JsObj {
@@ -194,7 +197,7 @@ impl Hash for JsValue {
             JsValue::Number(n) => unsafe { state.write_u64(std::mem::transmute(*n)) },
             JsValue::Boolean(b) => b.hash(state),
             JsValue::String(str) => str.hash(state),
-            JsValue::Object(jsobj) => jsobj.borrow().identity.hash(state),
+            JsValue::Object(jsobj) => jsobj.borrow().borrow().identity.hash(state),
         }
     }
 }
@@ -208,7 +211,7 @@ impl PartialEq for JsValue {
             (JsValue::Boolean(b1), JsValue::Boolean(b2)) => b1 == b2,
             (JsValue::String(str1), JsValue::String(str2)) => str1 == str2,
             (JsValue::Object(obj1), JsValue::Object(obj2)) => {
-                obj1.borrow().identity == obj2.borrow().identity
+                obj1.borrow().borrow().identity == obj2.borrow().borrow().identity
             }
             (_, _) => false,
         }
@@ -239,10 +242,11 @@ impl JsValue {
             JsValue::Boolean(b) => b.to_string(),
             JsValue::String(s) => s.to_string(),
             JsValue::Object(obj) => {
-                let ref_mut = GcCell::try_borrow_mut(&obj);
+                let gc_ref = obj.borrow();
+                let ref_mut = GcCell::try_borrow_mut(&gc_ref);
                 let ref_mut = match ref_mut {
                     Ok(ok) => ok,
-                    Err(err) => return Rc::new("".into()), // circular
+                    Err(_err) => return Rc::new("".into()), // circular
                 };
                 if ref_mut.is_array {
                     let mut ret = Vec::new();

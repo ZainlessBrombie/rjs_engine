@@ -1,7 +1,7 @@
+use crate::js::data::engine_constants::ConstantStrings;
 use crate::js::data::js_execution::{EngineQueuer, FnOpRepr, JsVar, VarAlloc};
-use crate::js::data::js_types::{Identity, JSCallable, JsObj, JsProperty, JsValue, JsFn};
-use crate::js::data::EngineConstants::ConstantStrings;
-use gc::{Gc, GcCell};
+use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsObj, JsProperty, JsValue};
+use safe_gc::{Gc, GcCell};
 use std::borrow::BorrowMut;
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::hash_map::Entry;
@@ -29,7 +29,7 @@ impl<'a> JsObjectBuilder<'a> {
         };
     }
 
-    pub fn with_prop(mut self, key: Rc<String>, value: JsValue) -> Self {
+    pub fn with_prop(self, key: Rc<String>, value: JsValue) -> Self {
         return self.with_prop_full(key, value, true, true, true);
     }
 
@@ -53,7 +53,7 @@ impl<'a> JsObjectBuilder<'a> {
         self
     }
 
-    pub fn with_proto(mut self, proto: JsValue) -> Self {
+    pub fn with_proto(self, proto: JsValue) -> Self {
         let proto_str = self
             .strings
             .map(|s| s.proto.clone())
@@ -130,11 +130,11 @@ pub fn u_string(s: &str) -> JsValue {
 }
 
 thread_local! {
-    static str_pool: RefCell<HashMap<usize, Rc<String>>> = RefCell::new(Default::default());
+    static STR_POOL: RefCell<HashMap<usize, Rc<String>>> = RefCell::new(Default::default());
 }
 
 pub fn s_pool(s: &'static str) -> Rc<String> {
-    str_pool.with(|map| {
+    STR_POOL.with(|map| {
         match map
             .borrow_mut()
             .entry(s as *const str as *const c_void as usize)
@@ -190,38 +190,36 @@ impl ScopeLookup {
     }
 
     pub fn get(this: &Scope, name: &Rc<String>, heaped: bool) -> Option<VarAlloc> {
-        let mut ret = RefCell::borrow_mut(this)
-            .cur
-            .get(name)
-            .map(|r| {
+        let ret = RefCell::borrow_mut(this).cur.get(name).map(|r| {
+            if heaped {
+                return VarAlloc::CapturedAt {
+                    name: name.clone(),
+                    from: Box::new(r.clone()),
+                    target: 0,
+                };
+            }
+            r.clone()
+        });
+        let mut ret = ret.or_else(|| {
+            let this = RefCell::borrow(this);
+            this.prev.as_ref().map_or(None, |p| {
                 if heaped {
-                    return VarAlloc::CapturedAt {
-                        name: name.clone(),
-                        from: Box::new(r.clone()),
-                        target: 0,
-                    };
+                    Sl::get(p, name, false).map(|source| {
+                        return VarAlloc::CapturedAt {
+                            name: name.clone(),
+                            from: Box::new(source),
+                            target: 0,
+                        };
+                    })
+                } else {
+                    ScopeLookup::get(&p, &name, this.heap_break)
+                    // TODO possibly incorrect
                 }
-                r.clone()
             })
-            .or_else(|| {
-                RefCell::borrow(this).prev.as_ref().map_or(None, |mut p| {
-                    if heaped {
-                        Sl::get(p, name, false).map(|source| {
-                            return VarAlloc::CapturedAt {
-                                name: name.clone(),
-                                from: Box::new(source),
-                                target: 0,
-                            };
-                        })
-                    } else {
-                        ScopeLookup::get(&this, &name, RefCell::borrow(this).heap_break)
-                        // TODO possibly incorrect
-                    }
-                })
-            });
+        });
         if let Some(ret) = &mut ret {
             if let VarAlloc::CapturedAt { target, .. } = ret {
-                let this = RefCell::borrow_mut(this);
+                let mut this = RefCell::borrow_mut(this);
                 this.local_counter += 1;
                 *target = this.local_counter - 1;
             }
@@ -231,7 +229,7 @@ impl ScopeLookup {
 
     pub fn insert_here(this: &Scope, name: Rc<String>) -> VarAlloc {
         return ScopeLookup::get(&this, &name, false).unwrap_or_else(|| {
-            let this = RefCell::borrow_mut(this);
+            let mut this = RefCell::borrow_mut(this);
             let ret = VarAlloc::LocalAt(name.clone(), this.local_counter);
             this.local_counter += 1;
             this.cur.insert(name.clone(), ret.clone());
@@ -245,18 +243,19 @@ impl ScopeLookup {
     }
 
     pub fn insert_top(this: &Scope, name: Rc<String>) -> VarAlloc {
-        if let Some(prev) = &RefCell::borrow(this).prev {
+        let mut borrow1 = RefCell::borrow_mut(this);
+        if let Some(prev) = &borrow1.prev {
             return ScopeLookup::insert_top(prev, name);
         } else {
-            let v = VarAlloc::Static(name, JsVar::new_t());
-            RefCell::borrow(this).cur.insert(name.clone(), v.clone());
+            let v = VarAlloc::Static(name.clone(), JsVar::new(name.clone()));
+            (&mut borrow1).cur.insert(name.clone(), v.clone());
             return v;
         }
     }
 
     pub fn temp_var(this: &Scope) -> VarAlloc {
         let mut this = borm(this);
-        this.local_counter += 1;
+        this.local_counter += 2;
         return VarAlloc::LocalAt(Rc::new("".into()), this.local_counter - 1);
     }
 }
@@ -293,7 +292,7 @@ impl OpBuilder {
         }
     }
 
-    pub fn var_dec(&mut self, t: VType, name: Rc<String>) -> &mut Self {
+    pub fn var_dec(&mut self, _t: VType, name: Rc<String>) -> &mut Self {
         ScopeLookup::insert_here(&self.scopes, name.clone());
         self
     }
@@ -306,8 +305,8 @@ impl OpBuilder {
     }
 
     pub fn var_w(&mut self, name: Rc<String>, what: impl FnOnce(&mut OpBuilder)) -> &mut OpBuilder {
-        let result = self.sub_b();
-        what(self);
+        let mut result = self.sub_b();
+        what(&mut result);
         self.statements.push(FnOpRepr::Assign {
             target: Sl::get_or_global(&self.scopes, name),
             what: Rc::new(FnOpRepr::Multi {
@@ -318,8 +317,8 @@ impl OpBuilder {
     }
 
     pub fn var_w_t(&mut self, v: VarAlloc, what: impl FnOnce(&mut OpBuilder)) -> &mut OpBuilder {
-        let result = self.sub_b();
-        what(self);
+        let mut result = self.sub_b();
+        what(&mut result);
         self.statements.push(FnOpRepr::Assign {
             target: v,
             what: Rc::new(FnOpRepr::Multi {
@@ -359,8 +358,8 @@ impl OpBuilder {
         else_block: impl FnOnce(&mut OpBuilder),
     ) -> &mut OpBuilder {
         let mut c_b = self.sub_b();
-        let mut i_b = self.sub_b();
-        let mut e_b = self.sub_b();
+        let mut i_b = self.scope(false);
+        let mut e_b = self.scope(false);
 
         condition(&mut c_b);
         if_block(&mut i_b);
@@ -414,8 +413,12 @@ impl OpBuilder {
         condition: impl FnOnce(&mut OpBuilder),
         body: impl FnOnce(&mut OpBuilder),
     ) -> &mut OpBuilder {
-        let cond_r = self.sub_b();
-        let body_r = self.sub_b();
+        let mut cond_r = self.sub_b();
+        let mut body_r = self.scope(false);
+
+        condition(&mut cond_r);
+        body(&mut body_r);
+
         self.statements.push(FnOpRepr::While {
             condition: Rc::from(FnOpRepr::Multi {
                 block: cond_r.statements,
@@ -435,10 +438,11 @@ impl OpBuilder {
         each: impl FnOnce(&mut OpBuilder),
         body: impl FnOnce(&mut OpBuilder),
     ) -> &mut OpBuilder {
-        let mut init_r = self.sub_b();
-        let mut cond_r = self.sub_b();
-        let mut each_r = self.sub_b();
-        let mut body_r = self.sub_b();
+        let mut parent = self.scope(false); // Used to get a scope
+        let mut init_r = parent.sub_b();
+        let mut cond_r = parent.sub_b();
+        let mut each_r = parent.sub_b();
+        let mut body_r = parent.sub_b();
 
         init(&mut init_r);
         condition(&mut cond_r);
@@ -479,8 +483,90 @@ impl OpBuilder {
         self
     }
 
+    pub fn obj_e(&mut self) -> &mut OpBuilder {
+        self.statements
+            .push(FnOpRepr::NewObject { is_array: false });
+        self
+    }
+
     pub fn array_e(&mut self) -> &mut OpBuilder {
-        self.statements.push(FnOpRepr::NewObject { is_array: true });
+        let t_v = self.var_t();
+        self.statements.push(FnOpRepr::Assign {
+            target: t_v.clone(),
+            what: Rc::from(FnOpRepr::NewObject { is_array: true }),
+        });
+        self.assign_ref(
+            |b| b.var_r_t(t_v.clone()),
+            |b| {
+                b.literal(u_string("length"));
+            },
+            |b| {
+                b.literal(u_number(0.0));
+            },
+        );
+        self.assign_ref(
+            |b| b.var_r_t(t_v.clone()),
+            |b| {
+                b.literal(u_string("__proto__"));
+            },
+            |b| {
+                b.var_r(s_pool("Array")); // TODO true global
+            },
+        );
+        self.var_r_t(t_v);
+
+        self
+    }
+
+    pub fn numeral_add(
+        &mut self,
+        left: impl FnOnce(&mut OpBuilder),
+        right: impl FnOnce(&mut OpBuilder),
+    ) -> &mut OpBuilder {
+        let mut lb = self.sub_b();
+        let mut rb = self.sub_b();
+
+        left(&mut lb);
+        right(&mut rb);
+
+        self.statements.push(FnOpRepr::NumeralPlus {
+            left: Rc::new(FnOpRepr::Multi {
+                block: lb.statements,
+            }),
+            right: Rc::new(FnOpRepr::Multi {
+                block: rb.statements,
+            }),
+        });
+
+        self
+    }
+
+    pub fn assign_ref(
+        &mut self,
+        to: impl FnOnce(&mut OpBuilder),
+        key: impl FnOnce(&mut OpBuilder),
+        what: impl FnOnce(&mut OpBuilder),
+    ) -> &mut OpBuilder {
+        let mut to_b = self.sub_b();
+        let mut key_b = self.sub_b();
+        let mut what_b = self.sub_b();
+
+        to(&mut to_b);
+        key(&mut key_b);
+        what(&mut what_b);
+
+        self.statements.push(FnOpRepr::AssignRef {
+            to: Rc::new(FnOpRepr::Multi {
+                block: to_b.statements,
+            }),
+            key: Rc::new(FnOpRepr::Multi {
+                block: key_b.statements,
+            }),
+            what: Rc::new(FnOpRepr::Multi {
+                block: what_b.statements,
+            }),
+        });
+
         self
     }
 
@@ -504,10 +590,10 @@ impl OpBuilder {
 
         self.statements.push(FnOpRepr::Deref {
             from: Rc::new(FnOpRepr::Multi {
-                block: k.statements,
+                block: v.statements,
             }),
             key: Rc::new(FnOpRepr::Multi {
-                block: v.statements,
+                block: k.statements,
             }),
         });
         self
@@ -521,6 +607,7 @@ impl OpBuilder {
     ) -> &mut OpBuilder {
         let mut on_b = self.sub_b();
         let mut args_b = self.sub_b();
+
         on(&mut on_b);
         args(&mut args_b);
 
@@ -546,12 +633,144 @@ impl OpBuilder {
 
     pub fn build(self) -> JsValue {
         JsObjectBuilder::new(None)
-            .with_callable(JSCallable::Js { content: Rc::new("".to_string()), creator: Gc::new(JsFn { 
-                ops: Rc::new(FnOpRepr::Multi { block: self.statements }), 
-                captures: Rc::new(vec![])
-            })})
+            .with_callable(JSCallable::Js {
+                content: Rc::new("".to_string()),
+                creator: Gc::new(JsFn {
+                    ops: Rc::new(FnOpRepr::Multi {
+                        block: self.statements,
+                    }),
+                    captures: Rc::new(vec![]),
+                }),
+            })
             .build()
     }
+}
+
+macro_rules! js_val {
+    (undefined) => {{
+        b.literal(u_undefined());
+    }};
+    (null) => {{
+        b.literal(u_null());
+    }};
+    (s:$lit:literal) => {{
+        b.literal(u_string($lit));
+    }};
+    (n:$lit:literal) => {{
+        b.literal(u_number($lit));
+    }};
+    (o:{
+        $([$index:block]: $value:block)*
+    }) => {{
+        let temp = b.var_t();
+        b.var_w_t(temp.clone(), |b| {
+            b.obj_e();
+        });
+        $(
+            b.assign_ref(|b| {
+                b.var_r_t();
+            }, |b| {
+                $index
+            }, |b| {
+                $value
+            });
+        )*
+        b:var_r_t(temp);
+    }};
+    (a: [$($el:block),*]) => {
+        {
+            let temp = b.var_t();
+            b.var_w_t(temp.clone(), |b| {b.arr_e();});
+            let mut counter = 0.0;
+            $(
+                b.assign_ref(|b| {
+                    b.var_r_t(temp.clone());
+                }, |b| {
+                    js_number!(counter);
+                }, |b| {
+                    $el
+                });
+            )*
+            b.var_r_t(temp);
+        }
+    };
+}
+
+macro_rules! js_var {
+    ($left:literal = $right:block) => {
+        b.var_w(Rc::new($left), |b| {
+            $right;
+        });
+    };
+    ($left:block$([$index:block])+[$other:block] = $right:block) => {{
+        b.assign_ref(|b| {}, |b| {}, |b| {});
+    }};
+}
+
+macro_rules! js_if {
+        [($cond:block) {$($st:block)*}] => {
+            b.ifb(|b| {
+                $cond
+            }, |b| {
+                $($st)*
+            });
+        };
+}
+
+macro_rules! js_if_else {
+    (($cond:block) {$($ist:block)*} else {$($est:block)*}) => {
+            b.if_elseb(|b| {
+                $cond
+            }, |b| {
+                $($ist)*
+            }, |b| {
+                $($est)*
+            });
+    };
+}
+
+macro_rules! js_this {
+    () => {{
+        b.var_r_t(b.this());
+    }};
+}
+
+macro_rules! js_args {
+    () => {{
+        b.var_r_t(b.args());
+    }};
+}
+
+// TODO should "this" be a Fn too?
+macro_rules! js_call {
+    ($what:block(this: $this:ident, args: $args:block)) => {{
+        b.call($this.clone(), |b| $args);
+    }};
+}
+
+macro_rules! js_undefined {
+    () => {{
+        b.literal(u_undefined());
+    }};
+}
+
+macro_rules! js_number {
+    ($n:literal) => {{
+        b.literal(u_number($n as f64));
+    }};
+    ($n:ident) => {{
+        b.literal(u_number($n as f64));
+    }};
+}
+
+macro_rules! js_index {
+    ($of:block[$index:block]) => {
+        b.deref(|b| $of, |b| $index);
+    };
+}
+
+fn temp() {
+    OpBuilder::start().c
 }
 
 pub enum VType {

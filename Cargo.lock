@@ -143,23 +143,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gc"
-version = "0.3.6"
-dependencies = [
- "gc_derive",
-]
-
-[[package]]
-name = "gc_derive"
-version = "0.3.6"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
- "synstructure",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -410,12 +393,29 @@ checksum = "3b181ba2dcf07aaccad5448e8ead58db5b742cf85dfe035e2227f137a539a189"
 name = "rjs_engine"
 version = "0.1.0"
 dependencies = [
- "gc",
  "rand",
+ "safe-gc",
  "swc_atoms",
  "swc_common",
  "swc_ecma_ast",
  "swc_ecma_parser",
+]
+
+[[package]]
+name = "safe-gc"
+version = "0.1.0"
+dependencies = [
+ "safe_gc_derive",
+]
+
+[[package]]
+name = "safe_gc_derive"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "synstructure",
 ]
 
 [[package]]

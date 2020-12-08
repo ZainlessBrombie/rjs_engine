@@ -1,21 +1,14 @@
 extern crate swc_ecma_parser;
 use self::swc_ecma_parser::JscTarget;
-use crate::js::data::gc_util::GcDestr;
-use crate::js::data::js_execution::{EngineState, FnOpRepr, JsVar, VarAlloc};
-use crate::js::data::js_types;
-use crate::js::data::js_types::{JSCallable, JsFn, JsNext, JsObj, JsValue};
+use crate::js::data::js_execution::{EngineState, NativeFunction};
+use crate::js::data::js_types::{JSCallable, JsFn, JsValue};
 use crate::js::data::util::{
-    s_pool, u_bool, u_null, u_number, u_string, u_true, u_undefined, OpBuilder, VType,
+    s_pool, u_bool, u_null, u_number, u_string, u_true, u_undefined, JsObjectBuilder, OpBuilder,
+    VType,
 };
-use gc::{Finalize, Gc, GcCell, Trace};
-use std::any::Any;
-use std::borrow::{Borrow, BorrowMut};
-use std::cell::RefCell;
-use std::collections::HashMap;
+use safe_gc::{GcCell, Mark};
 use std::io::Write;
-use std::marker::PhantomData;
 use std::ops::Deref;
-use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
@@ -23,9 +16,8 @@ use swc_common::errors::{DiagnosticBuilder, Emitter};
 use swc_common::sync::Lrc;
 use swc_common::{errors::Handler, FileName, SourceMap};
 use swc_ecma_ast::{
-    ArrowExpr, BinaryOp, BlockStmtOrExpr, Decl, Expr, ExprOrSpread, ExprOrSuper, Function, Lit,
-    Module, ModuleItem, ObjectPatProp, Pat, PatOrExpr, Prop, PropName, PropOrSpread, Stmt,
-    UpdateOp, VarDecl, VarDeclOrExpr,
+    BinaryOp, Decl, Expr, ExprOrSuper, Function, Lit, Module, ModuleItem, ObjectPatProp, Pat,
+    PatOrExpr, PropName, Stmt, VarDecl, VarDeclOrExpr,
 };
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax};
 
@@ -53,6 +45,17 @@ struct JsEngineInternal {
     state: EngineState,
 }
 
+#[derive(Mark)]
+struct LogFunction {}
+
+impl NativeFunction for LogFunction {
+    fn native_call(&self, _this: JsValue, args: JsValue) -> Result<JsValue, JsValue> {
+        println!("Printing...");
+        println!("{}", args.to_system_string());
+        Ok(u_undefined())
+    }
+}
+
 impl JsEngine {
     pub fn new() -> JsEngine {
         return JsEngine {
@@ -70,18 +73,108 @@ impl JsEngine {
     /// Returns a JsValue that represents a function. when it is called, the module is executed and returned by the function.
     pub fn ingest_code(&self, mut module: Module) -> JsValue {
         let mut b = OpBuilder::start();
-        let ret = module
-            .body
-            .drain(..)
-            .map(|mod_item| match &mod_item {
+        b.var_w(s_pool("console"), |b| {
+            b.literal(
+                JsObjectBuilder::new(None)
+                    .with_prop(
+                        s_pool("log"),
+                        JsObjectBuilder::new(None)
+                            .with_callable(JSCallable::Native {
+                                op: Rc::new(LogFunction {}),
+                            })
+                            .build(),
+                    )
+                    .build(),
+            );
+        });
+        b.var_w(s_pool("Array"), |b| {
+            let tv = b.var_t();
+            b.var_w_t(tv.clone(), |b| {
+                b.obj_e();
+            });
+
+            // Assign push
+            b.assign_ref(
+                |b| b.var_r_t(tv.clone()),
+                |b| {
+                    b.literal(u_string("push"));
+                },
+                |b| {
+                    // Push Fn
+                    b.func(|b| {
+                        // Get current length
+                        let len = b.var_t();
+                        b.var_w_t(len.clone(), |b| {
+                            b.deref(
+                                |b| {
+                                    let this = b.this();
+                                    b.var_r_t(this);
+                                },
+                                |b| {
+                                    b.literal(u_string("length"));
+                                },
+                            );
+                        });
+                        b.var_w_t(len.clone(), |b| {
+                            b.literal(u_number(0.0));
+                        });
+                        // Getting length done
+
+                        // Assigning args[0] to this[this.length]
+                        let alloc = b.this();
+                        b.assign_ref(
+                            |b| b.var_r_t(alloc),
+                            |b| b.var_r_t(len.clone()),
+                            |b| {
+                                let alloc1 = b.args();
+                                b.deref(
+                                    |b| b.var_r_t(alloc1),
+                                    |b| {
+                                        b.literal(u_number(0.0));
+                                    },
+                                );
+                            },
+                        );
+
+                        b.assign_ref(
+                            |b| {
+                                let alloc2 = b.this();
+                                b.var_r_t(alloc2);
+                            },
+                            |b| {
+                                b.literal(u_string("length"));
+                            },
+                            |b| {
+                                b.numeral_add(
+                                    |b| {
+                                        b.var_r_t(len.clone());
+                                    },
+                                    |b| {
+                                        b.literal(u_number(1.0));
+                                    },
+                                );
+                            },
+                        );
+
+                        b.literal(u_undefined());
+                    });
+                    // End push Fn
+                },
+            );
+            // End assign push
+            b.var_r_t(tv);
+        });
+
+        for mod_item in module.body.drain(..) {
+            match &mod_item {
                 ModuleItem::ModuleDecl(_declr) => {
                     println!("Skipping module item!");
                 }
                 ModuleItem::Stmt(stmt) => {
                     self.ingest_statement(&mut b, stmt);
                 }
-            })
-            .collect::<Vec<_>>();
+            }
+        }
         b.build()
     }
 
@@ -224,7 +317,7 @@ impl JsEngine {
         b: &mut OpBuilder,
         pat: &Pat,
         source: impl FnOnce(&mut OpBuilder),
-    ) -> FnOpRepr {
+    ) {
         // TODO dup code
         let prop_name = move |prop: &PropName| {
             return match &prop {
@@ -293,19 +386,40 @@ impl JsEngine {
                 }
             }
             Pat::Assign(assign) => {
-                return self.ingest_assignment(b, &assign.left, source);
+                self.ingest_assignment(b, &assign.left, source);
             }
             Pat::Invalid(invalid) => {
                 unimplemented!("Invalid assignment is todo")
             }
             Pat::Expr(expr) => {
-                return self.ingest_expression(b, &expr);
+                match Box::deref(expr) {
+                    Expr::Member(mem) => {
+                        b.assign_ref(
+                            |b| {
+                                let ex = match &mem.obj {
+                                    ExprOrSuper::Super(_) => {
+                                        unimplemented!()
+                                    }
+                                    ExprOrSuper::Expr(ex) => ex,
+                                };
+                                self.ingest_expression(b, &ex);
+                            },
+                            |b| {
+                                self.ingest_expression(b, &mem.prop);
+                            },
+                            source,
+                        );
+                    }
+                    _ => {
+                        unimplemented!()
+                    }
+                }
+                self.ingest_expression(b, &expr);
             }
         }
-        unimplemented!()
     }
 
-    fn ingest_expression(&self, b: &mut OpBuilder, expr: &Expr) -> FnOpRepr {
+    fn ingest_expression(&self, b: &mut OpBuilder, expr: &Expr) {
         let prop_name = |b: &mut OpBuilder, prop: &PropName| {
             return match prop {
                 PropName::Ident(ident) => {
@@ -344,9 +458,21 @@ impl JsEngine {
             }
             Expr::Unary(_) => {}
             Expr::Update(up) => {}
-            Expr::Bin(bin) => {
-                unimplemented!()
-            }
+            Expr::Bin(bin) => match &bin.op {
+                BinaryOp::Add => {
+                    b.numeral_add(
+                        |b| {
+                            self.ingest_expression(b, &bin.left);
+                        },
+                        |b| {
+                            self.ingest_expression(b, &bin.right);
+                        },
+                    );
+                }
+                _ => {
+                    unimplemented!("{:?}", bin)
+                }
+            },
             Expr::Assign(assign) => match &assign.left {
                 PatOrExpr::Expr(expr) => {
                     unimplemented!()
@@ -359,14 +485,46 @@ impl JsEngine {
             },
             Expr::Member(member) => {
                 // omg thank you swc
-                unimplemented!()
+                let temp = b.var_t();
+
+                b.var_w_t(temp.clone(), |b| {
+                    match &member.obj {
+                        ExprOrSuper::Super(_) => {
+                            unimplemented!()
+                        }
+                        ExprOrSuper::Expr(ex) => self.ingest_expression(b, &ex),
+                    };
+                });
+
+                match Box::deref(&member.prop) {
+                    Expr::Ident(ident) => {
+                        b.deref(
+                            |b| {
+                                b.var_r_t(temp.clone());
+                            },
+                            |b| {
+                                b.literal(u_string(&ident.sym.to_string())); // TODO this stuff...
+                            },
+                        );
+                    }
+                    _ => {
+                        b.deref(
+                            |b| {
+                                b.var_r_t(temp.clone());
+                            },
+                            |b| {
+                                self.ingest_expression(b, &member.prop);
+                            },
+                        );
+                    }
+                }
             }
-            Expr::Cond(cond) => {
+            Expr::Cond(_cond) => {
                 // ternary
                 unimplemented!()
             }
             Expr::Call(call) => match &call.callee {
-                ExprOrSuper::Super(super_call) => {
+                ExprOrSuper::Super(_super_call) => {
                     unimplemented!()
                 }
                 ExprOrSuper::Expr(expr) => {
@@ -396,22 +554,36 @@ impl JsEngine {
                                 b.call(
                                     arr_v.clone(),
                                     |b| {
-                                        b.var_r_t(arr_v.clone());
+                                        b.var_r_t(push.clone());
                                     },
                                     |b| {
                                         // TODO spread
-                                        self.ingest_expression(b, &exp.expr);
+                                        let vt = b.var_t();
+                                        b.var_w_t(vt.clone(), |b| {
+                                            b.array_e();
+                                        });
+                                        b.assign_ref(
+                                            |b| b.var_r_t(vt.clone()),
+                                            |b| {
+                                                b.literal(u_number(0.0));
+                                            },
+                                            |b| {
+                                                self.ingest_expression(b, &exp.expr);
+                                            },
+                                        );
+                                        b.var_r_t(vt.clone());
                                     },
                                 );
                             }
+                            b.var_r_t(arr_v);
                         },
                     );
                 }
             },
-            Expr::New(n) => {
+            Expr::New(_n) => {
                 unimplemented!()
             }
-            Expr::Seq(seq) => {
+            Expr::Seq(_seq) => {
                 unimplemented!()
             }
             Expr::Ident(ident) => {
@@ -437,7 +609,7 @@ impl JsEngine {
                             .expect("bigint unimplemented!"),
                     ));
                 }
-                Lit::Regex(regex) => {
+                Lit::Regex(_regex) => {
                     unimplemented!()
                 }
                 Lit::JSXText(_) => {
@@ -450,7 +622,7 @@ impl JsEngine {
             Expr::TaggedTpl(_) => {
                 unimplemented!("no jsx")
             }
-            Expr::Arrow(arrow_expr) => {
+            Expr::Arrow(_arrow_expr) => {
                 unimplemented!()
             }
             Expr::Class(_) => {
@@ -462,7 +634,7 @@ impl JsEngine {
             Expr::MetaProp(_) => {
                 unimplemented!("meta props not implemented")
             }
-            Expr::Await(aw) => {
+            Expr::Await(_aw) => {
                 // TODO we are not handling await yet
                 unimplemented!()
             }
@@ -509,10 +681,9 @@ impl JsEngine {
                 unimplemented!()
             }
         }
-        unimplemented!()
     }
 
-    fn ingest_function(&self, b: &mut OpBuilder, function: &Function) -> FnOpRepr {
+    fn ingest_function(&self, b: &mut OpBuilder, function: &Function) {
         if !function.decorators.is_empty() {
             panic!("decorators (@) unimplemented!")
         }
@@ -535,8 +706,6 @@ impl JsEngine {
                 }
             }
         });
-
-        unimplemented!()
     }
 }
 
@@ -562,10 +731,10 @@ pub fn m1() {
     println!("\nConsumed: {}", consumed);
     let cm: Lrc<SourceMap> = Default::default();
     let handler = Handler::with_emitter(true, false, Box::new(Empty {}));
-    let fm = cm.new_source_file(
-        FileName::Custom("test.js".into()),
-        "console.log('Hello World')".into(),
-    );
+    let source = "{
+        console.log('Hello World');
+    }";
+    let fm = cm.new_source_file(FileName::Custom("test.js".into()), source.into());
     let lexer = Lexer::new(
         Syntax::Es(Default::default()),
         JscTarget::Es2020,
@@ -574,13 +743,15 @@ pub fn m1() {
     );
     let mut parser = Parser::new_from(lexer);
 
-    for e in parser.take_errors() {
-        e.into_diagnostic(&handler).emit();
-    }
-
     let module = parser
         .parse_module()
-        .map_err(|err| err.into_diagnostic(&handler).emit())
+        .map_err(|err| {
+            println!("{:?}", err.into_diagnostic(&handler).span);
+            for e in parser.take_errors() {
+                e.into_diagnostic(&handler).emit();
+            }
+            panic!()
+        })
         .unwrap();
 
     let mut engine = JsEngine {

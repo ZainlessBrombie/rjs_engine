@@ -2,10 +2,11 @@ use crate::js::data::js_execution::FnOp::Throw;
 use crate::js::data::js_execution::VarAlloc::CapturedAt;
 use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsProperty, JsValue};
 use crate::js::data::util::{s_pool, u_bool, u_number, u_string, u_undefined, JsObjectBuilder};
-use gc::{Finalize, Trace};
-use gc::{Gc, GcCell};
-use std::cell::RefCell;
+use safe_gc::Mark;
+use safe_gc::{Gc, GcCell};
+use std::cell::{Cell, RefCell};
 use std::f64::NAN;
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -32,22 +33,25 @@ impl EngineQueuer {
             .expect("Mutex poisoned. This is possibly an internal error.");
         guard.push(Box::new(|f| {
             // todo
-            Gc::new(GcCell::new(AsyncStack {
+            f(Gc::new(GcCell::new(AsyncStack {
                 stack: vec![
                     StackElement::Value(u_undefined()),
-                    StackElement::Value(u_undefined()),
                     StackElement::Value(val),
+                    StackElement::Op(FnOp::Pop { n: 2 }),
+                    StackElement::Op(FnOp::Nop {}),
+                    StackElement::Op(FnOp::Nop {}),
+                    StackElement::Op(FnOp::Nop {}),
                     StackElement::Op(FnOp::CallFunction {
                         this: JsVar::Stack {
                             pos: 0,
                             name: Rc::new("".to_string()),
                         },
                         func: JsVar::Stack {
-                            pos: 2,
+                            pos: 1,
                             name: Rc::new("".to_string()),
                         },
                         args: JsVar::Stack {
-                            pos: 1,
+                            pos: 0,
                             name: Rc::new("".to_string()),
                         },
                         target: JsVar::Stack {
@@ -59,7 +63,7 @@ impl EngineQueuer {
                 method_label: Identity::new(),
                 try_label: Identity::new(),
                 latest_fn_pos: 0,
-            }));
+            })));
         }));
     }
 }
@@ -77,7 +81,8 @@ impl EngineState {
         loop {
             while consumed < ticks {
                 if let Some(cur) = self.tick_queue.pop() {
-                    let mut ref_mut = GcCell::borrow_mut(&cur);
+                    let gc_ref = cur.borrow();
+                    let mut ref_mut = GcCell::borrow_mut(&gc_ref);
                     let (result, cost) = ref_mut.run(ticks - consumed);
                     consumed += cost;
                     match result {
@@ -113,7 +118,7 @@ impl EngineState {
     }
 }
 
-#[derive(Trace, Finalize)]
+#[derive(Mark)]
 pub struct AsyncStack {
     stack: Vec<StackElement>, // values first, ops second - otherwise we would run into a value while evaluating!
     method_label: Identity,
@@ -121,12 +126,12 @@ pub struct AsyncStack {
     latest_fn_pos: usize, // not up to date, updated when max ticks runs out and used when started
 }
 
-enum AsyncStackResult {
+pub enum AsyncStackResult {
     Forget,
     Keep,
 }
 
-struct StackAccess<'a> {
+pub struct StackAccess<'a> {
     stack: &'a mut AsyncStack,
 }
 
@@ -148,6 +153,10 @@ impl<'a> StackAccess<'a> {
             .stack
             .get(pos + self.stack.latest_fn_pos)
             .expect("corrupt stack (3)")
+    }
+    pub fn read_stack_absolute(&'a self, pos: usize) -> &'a StackElement {
+        // self.latest_fn_pos
+        self.stack.stack.get(pos).expect("corrupt stack (3)")
     }
 
     pub fn make_local(&mut self) -> JsVar {
@@ -178,7 +187,21 @@ impl<'a> StackAccess<'a> {
         }
     }
 
+    pub fn local_at_named(&mut self, pos: usize, name: Rc<String>) -> JsVar {
+        JsVar::Stack {
+            pos: self.stack.latest_fn_pos + pos,
+            name,
+        }
+    }
+
     pub fn write_stack(&'a mut self, pos: usize) -> &'a mut StackElement {
+        self.stack
+            .stack
+            .get_mut(pos + self.stack.latest_fn_pos)
+            .expect("corrupt stack (4)")
+    }
+
+    pub fn write_stack_absolute(&mut self, pos: usize) -> &mut StackElement {
         self.stack.stack.get_mut(pos).expect("corrupt stack (4)")
     }
 
@@ -187,28 +210,15 @@ impl<'a> StackAccess<'a> {
     }
 
     pub fn try_label(&self) -> Identity {
-        self.stack.method_label.clone()
+        self.stack.try_label.clone()
     }
 }
 
-struct LogFunction {
-    whatever: (),
-}
-
-impl Finalize for LogFunction {}
-
-unsafe impl Trace for LogFunction {
-    unsafe fn trace(&self) {}
-
-    unsafe fn root(&self) {}
-
-    unsafe fn unroot(&self) {}
-
-    fn finalize_glue(&self) {}
-}
+#[derive(Mark)]
+struct LogFunction {}
 
 impl NativeFunction for LogFunction {
-    fn native_call(&self, this: JsValue, args: JsValue) -> Result<JsValue, JsValue> {
+    fn native_call(&self, _this: JsValue, args: JsValue) -> Result<JsValue, JsValue> {
         println!("{}", args.to_system_string());
         Ok(u_undefined())
     }
@@ -220,6 +230,9 @@ impl AsyncStack {
 
         let mut access = StackAccess { stack: self };
 
+        println!("return: {:?}", access.method_label());
+        println!("catch: {:?}", access.try_label());
+
         loop {
             if consumed >= max {
                 self.latest_fn_pos = access.stack.latest_fn_pos; // TODO use reference for stack access
@@ -227,34 +240,27 @@ impl AsyncStack {
             }
 
             if let Some(last) = access.stack.stack.pop() {
-                let stack_op = match &last {
+                //println!("\n{:?}\n", last);
+                for (i, x) in access.stack.stack.iter().enumerate() {
+                    //println!("{}: {:?}", i, x)
+                }
+                //println!("-----------\n");
+                let stack_op = match last {
                     // TODO by value
-                    StackElement::Op(op) => op.clone(),
+                    StackElement::Op(op) => op,
                     _ => {
                         panic!("Corrupt stack (1)")
                     }
                 };
                 let action = FnOp::run(stack_op, &mut access);
                 match action {
-                    FnOpAction::Pop(pop) => access.stack.stack.truncate(pop),
+                    FnOpAction::Pop(pop) => {
+                        access.stack.stack.truncate(access.stack.stack.len() - pop)
+                    }
                     FnOpAction::Push(mut push) => access.stack.stack.append(&mut push),
                     FnOpAction::One(one) => access.stack.stack.push(one),
-                    FnOpAction::LoadGlobal { name, target } => {
-                        if name.as_str() == "console" {
-                            target.set(
-                                Some(&mut access),
-                                JsObjectBuilder::new(None)
-                                    .with_prop(
-                                        s_pool("log"),
-                                        JsObjectBuilder::new(None)
-                                            .with_callable(JSCallable::Native {
-                                                op: Rc::new(LogFunction { whatever: () }),
-                                            })
-                                            .build(),
-                                    )
-                                    .build(),
-                            );
-                        }
+                    FnOpAction::LoadGlobal { name: _, target: _ } => {
+                        unimplemented!() // TODO remove loadglobal
                     }
                     FnOpAction::LabelWalkback { id } => {
                         let value = access.stack.stack.pop().expect("corrupt stack (2)");
@@ -270,6 +276,9 @@ impl AsyncStack {
                                 StackElement::Op(_) => {}
                                 StackElement::HeapVar(_) => {}
                             }
+                        }
+                        if access.stack.stack.is_empty() {
+                            continue;
                         }
                         let temp = access.stack.stack.pop().expect("corrupt stack (5)");
                         access.stack.stack.push(value);
@@ -303,9 +312,12 @@ impl AsyncStack {
                             ), // TODO
                         );
                     }
-                    FnOpAction::Await { target, what } => {
+                    FnOpAction::Await { target: _, what: _ } => {
                         self.latest_fn_pos = access.stack.latest_fn_pos;
                         return (AsyncStackResult::Forget, consumed); // TODO await
+                    }
+                    FnOpAction::SetFnOffset { to } => {
+                        access.stack.latest_fn_pos = to;
                     }
                 };
                 consumed += 1;
@@ -317,7 +329,7 @@ impl AsyncStack {
     }
 }
 
-#[derive(Clone, Trace, Finalize)]
+#[derive(Clone, Mark, Debug)]
 pub enum VarAlloc {
     CapturedAt {
         name: Rc<String>,
@@ -330,11 +342,17 @@ pub enum VarAlloc {
 
 impl VarAlloc {}
 
-pub trait NativeFunction: Trace + Finalize {
+pub trait NativeFunction: Mark {
     fn native_call(&self, this: JsValue, args: JsValue) -> Result<JsValue, JsValue>;
 }
 
-#[derive(Clone, Trace, Finalize)]
+impl Debug for dyn NativeFunction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[native function]")
+    }
+}
+
+#[derive(Clone, Mark, Debug)]
 pub enum FnOpRepr {
     LoadGlobal {
         name: Rc<String>,
@@ -454,12 +472,15 @@ impl FnOpRepr {
         store_at: JsVar,
         into: &mut Vec<StackElement>,
     ) {
+        // let before_len = into.len();
         let to_var = |stack: &mut StackAccess, var_alloc: &VarAlloc| match var_alloc {
-            VarAlloc::CapturedAt { name, from, target } => {
-                stack.read_stack(*target).assume_capture()
-            }
-            VarAlloc::LocalAt(name, pos) => stack.local_at(*pos),
-            VarAlloc::Static(name, var) => var.clone(),
+            VarAlloc::CapturedAt {
+                name: _,
+                from: _,
+                target,
+            } => stack.read_stack(*target).assume_capture(),
+            VarAlloc::LocalAt(name, pos) => stack.local_at_named(*pos, name.clone()),
+            VarAlloc::Static(_name, var) => var.clone(),
         };
         match op {
             FnOpRepr::LoadGlobal { name } => {
@@ -469,7 +490,8 @@ impl FnOpRepr {
                 }));
             }
             FnOpRepr::Assign { what, target } => {
-                FnOpRepr::call_stack(stack, what.deref(), to_var(stack, target), into);
+                let var1 = to_var(stack, target);
+                FnOpRepr::call_stack(stack, what.deref(), var1, into);
             }
             FnOpRepr::LoadStatic { value } => into.push(StackElement::Op(FnOp::LoadStatic {
                 value: value.clone(),
@@ -490,8 +512,8 @@ impl FnOpRepr {
 
                 into.push(StackElement::Op(FnOp::CallFunction {
                     this: to_var(stack, this),
-                    func: on_v,
-                    args: arg_v,
+                    func: on_v.clone(),
+                    args: arg_v.clone(),
                     target: ret.clone(),
                 }));
                 FnOpRepr::call_stack(stack, arg_array, arg_v.clone(), into);
@@ -516,7 +538,9 @@ impl FnOpRepr {
                     key: k_v.clone(),
                     target: store_at.clone(),
                     optional: false,
-                }))
+                }));
+                FnOpRepr::call_stack(stack, key, k_v.clone(), into);
+                FnOpRepr::call_stack(stack, from, f_v.clone(), into);
             }
             FnOpRepr::IfElse {
                 condition,
@@ -531,14 +555,16 @@ impl FnOpRepr {
 
                 into.push(StackElement::Op(FnOp::ToLabel { id: end.clone() }));
 
-                FnOpRepr::call_stack(stack, else_block, stack.make_local(), into); // 3) load else block
+                let var2 = stack.make_local();
+                FnOpRepr::call_stack(stack, else_block, var2, into); // 3) load else block
 
                 into.push(StackElement::Value(JsValue::Undefined));
                 into.push(StackElement::Op(FnOp::Pop { n: 1 }));
                 into.push(StackElement::Label(else_label.clone()));
                 into.push(StackElement::Op(FnOp::ToLabel { id: end.clone() }));
 
-                FnOpRepr::call_stack(stack, if_block, stack.make_local(), into); // 4) load if block
+                let var3 = stack.make_local();
+                FnOpRepr::call_stack(stack, if_block, var3, into); // 4) load if block
 
                 let is_true = stack.make_local();
 
@@ -561,7 +587,8 @@ impl FnOpRepr {
 
                 let before = into.len();
 
-                FnOpRepr::call_stack(stack, block, stack.make_local(), into);
+                let var4 = stack.make_local();
+                FnOpRepr::call_stack(stack, block, var4, into);
                 into.push(StackElement::Op(FnOp::ToLabel {
                     id: end_label.clone(),
                 }));
@@ -590,8 +617,10 @@ impl FnOpRepr {
 
                 let before = into.len();
 
-                FnOpRepr::call_stack(stack, block, stack.make_local(), into);
-                FnOpRepr::call_stack(stack, each, stack.make_local(), into);
+                let var5 = stack.make_local();
+                FnOpRepr::call_stack(stack, block, var5, into);
+                let var6 = stack.make_local();
+                FnOpRepr::call_stack(stack, each, var6, into);
                 into.push(StackElement::Op(FnOp::ToLabel {
                     id: end_label.clone(),
                 }));
@@ -604,7 +633,8 @@ impl FnOpRepr {
                     n: into.len() - before,
                 }));
 
-                FnOpRepr::call_stack(stack, initial, stack.make_local(), into);
+                let var7 = stack.make_local();
+                FnOpRepr::call_stack(stack, initial, var7, into);
             }
             FnOpRepr::Nop {} => {}
             FnOpRepr::Multi { block } => {
@@ -652,7 +682,7 @@ impl FnOpRepr {
 
                 into.push(StackElement::Op(FnOp::ToLabel { id: end_label }));
                 into.push(StackElement::Op(FnOp::SkipIf {
-                    condition: temp_not,
+                    condition: temp_not.clone(),
                 }));
                 into.push(StackElement::Op(FnOp::Not {
                     source: store_at.clone(),
@@ -770,10 +800,11 @@ impl FnOpRepr {
                 }));
             }
         }
+        //println!("{:?}\nwurde zu\n{:?}\n", op, &into[before_len..]);
     }
 }
-
-#[derive(Clone, Trace, Finalize)]
+// TODO put #[cfg(debug_assertions)] in places
+#[derive(Clone, Mark, Debug)]
 pub enum FnOp {
     NewObject {
         target: JsVar,
@@ -813,11 +844,21 @@ pub enum FnOp {
         args: JsVar,
         target: JsVar,
     },
+    SetFunctionOffset {
+        to: usize,
+    },
+    StorePop {
+        target: JsVar,
+        pop_count: usize,
+    },
     NativeCall {
         this: JsVar,
         func: Rc<dyn NativeFunction>,
         args: JsVar,
         target: JsVar,
+    },
+    Expand {
+        what: Rc<FnOpRepr>,
     },
     Pop {
         n: usize, // used for popping local temp vars
@@ -896,8 +937,9 @@ impl FnOp {
         return match this {
             FnOp::LoadGlobal { name, target } => FnOpAction::LoadGlobal { name, target },
             FnOp::Assign { source, target } => {
-                target.set(Some(stack), source.get(Some(stack)));
-                FnOpAction::Pop(1)
+                let value2 = source.get(Some(stack));
+                target.set(Some(stack), value2);
+                FnOpAction::Nop
             }
             FnOp::LoadStatic { value, target } => {
                 target.set(Some(stack), value);
@@ -909,19 +951,67 @@ impl FnOp {
                 args,
                 target,
             } => {
-                unimplemented!()
+                let our_pos = stack.stack.latest_fn_pos;
+                let upcoming_pos = stack.stack.stack.len() + 4;
+                let mut result = vec![
+                    StackElement::Op(FnOp::SetFunctionOffset { to: our_pos }),
+                    StackElement::Value(u_undefined()),
+                    StackElement::Op(FnOp::StorePop {
+                        target: target.clone(),
+                        pop_count: 1,
+                    }),
+                    StackElement::Label(stack.method_label()),
+                    StackElement::Value(this.get(Some(stack))),
+                    StackElement::Value(args.get(Some(stack))),
+                    StackElement::Op(FnOp::ToLabel {
+                        id: stack.method_label(),
+                    }),
+                ];
+                let ops = func.get(Some(stack));
+                match ops {
+                    JsValue::Object(obj) => match &obj.borrow().borrow_mut().call {
+                        JSCallable::NotCallable => { /*TODO*/ }
+                        JSCallable::Js { creator, .. } => {
+                            result.push(StackElement::Op(FnOp::Expand {
+                                what: creator.borrow().ops.clone(),
+                            }));
+                            result.push(StackElement::Op(FnOp::SetFunctionOffset {
+                                to: upcoming_pos,
+                            }));
+                        }
+                        JSCallable::Native { op } => {
+                            match op.native_call(this.get(Some(stack)), args.get(Some(stack))) {
+                                Ok(ok) => {
+                                    target.set(Some(stack), ok);
+                                    return FnOpAction::Nop;
+                                }
+                                Err(err) => {
+                                    let v = stack.make_local();
+                                    v.set(Some(stack), err);
+                                    return FnOpAction::One(StackElement::Op(FnOp::Throw {
+                                        what: v,
+                                    }));
+                                }
+                            }
+                        }
+                    },
+                    _ => {
+                        unimplemented!()
+                    }
+                }
+                FnOpAction::Push(result)
             }
             FnOp::Throw { what } => FnOpAction::Two(
-                StackElement::Value(what.get(Some(stack))),
                 StackElement::Op(FnOp::ToLabel {
                     id: stack.try_label(),
                 }),
+                StackElement::Value(what.get(Some(stack))),
             ),
             FnOp::Return { target } => FnOpAction::Two(
-                StackElement::Value(target.get(Some(stack))),
                 StackElement::Op(FnOp::ToLabel {
                     id: stack.method_label(),
                 }),
+                StackElement::Value(target.get(Some(stack))),
             ),
             FnOp::Deref {
                 from,
@@ -938,10 +1028,13 @@ impl FnOp {
                             let v = stack.make_local();
                             FnOpAction::Two(
                                 StackElement::Op(FnOp::LoadStatic {
-                                    value: u_string("cannot read key of undefined"),
+                                    value: u_string(&format!(
+                                        "cannot read key {} of undefined",
+                                        key.get(Some(stack)).to_system_string()
+                                    )),
                                     target: v.clone(),
                                 }),
-                                StackElement::Op(FnOp::Throw { what: v }),
+                                StackElement::Op(FnOp::Throw { what: v.clone() }),
                             )
                         }
                     }
@@ -1045,11 +1138,18 @@ impl FnOp {
                             key_v = JsValue::String(key_v.to_system_string());
                         }
 
-                        if let Some(v) = GcCell::borrow(&obj).content.get(&key_v.to_system_string())
+                        if let Some(v) = GcCell::borrow(&obj.borrow())
+                            .content
+                            .get(&key_v.to_system_string())
                         {
                             target.set(Some(stack), v.value.clone());
                             FnOpAction::Nop
                         } else {
+                            if key.get(Some(stack)).to_system_string().as_str() == "__proto__" {
+                                // TODO :(
+                                target.set(Some(stack), u_undefined());
+                                return FnOpAction::Nop;
+                            }
                             let proto_name = stack.make_local();
                             proto_name.set(Some(stack), JsValue::String(s_pool("__proto__")));
                             let proto_loc = stack.make_local();
@@ -1094,7 +1194,8 @@ impl FnOp {
                         s.as_str() == (if *b { "1" } else { "0" })
                     }
                     (JsValue::Object(o1), JsValue::Object(o2)) => {
-                        GcCell::borrow(&o1).identity == GcCell::borrow(&o2).identity
+                        GcCell::borrow(&o1.borrow()).identity
+                            == GcCell::borrow(&o2.borrow()).identity
                     }
                     (_, _) => false, // TODO toprimitive
                 };
@@ -1113,7 +1214,8 @@ impl FnOp {
                     (JsValue::Boolean(b1), JsValue::Boolean(b2)) => b1 == b2,
                     (JsValue::String(s1), JsValue::String(s2)) => s1.as_str() == s2.as_str(),
                     (JsValue::Object(o1), JsValue::Object(o2)) => {
-                        &GcCell::borrow(&o1).identity == &GcCell::borrow(&o2).identity
+                        &GcCell::borrow(&o1.borrow()).identity
+                            == &GcCell::borrow(&o2.borrow()).identity
                     }
                     (_, _) => false,
                 };
@@ -1155,7 +1257,7 @@ impl FnOp {
                     }
                     JsValue::Object(obj) => {
                         if key.is_symbol() {
-                            obj.borrow_mut().symbol_keys.insert(
+                            obj.borrow().borrow_mut().symbol_keys.insert(
                                 key,
                                 JsProperty {
                                     enumerable: false,
@@ -1165,7 +1267,7 @@ impl FnOp {
                                 },
                             );
                         } else {
-                            obj.borrow_mut().content.insert(
+                            obj.borrow().borrow_mut().content.insert(
                                 key.to_system_string(),
                                 JsProperty {
                                     enumerable: true,
@@ -1218,10 +1320,9 @@ impl FnOp {
                 right,
                 target,
             } => {
-                target.set(
-                    Some(stack),
-                    u_number(coerce(left.get(Some(stack))) + coerce(right.get(Some(stack)))),
-                );
+                let coerce1 = coerce(left.get(Some(stack)));
+                let coerce2 = coerce(right.get(Some(stack)));
+                target.set(Some(stack), u_number(coerce1 + coerce2));
                 FnOpAction::Nop
             }
             FnOp::LabelSet { id } => FnOpAction::One(StackElement::Label(id)),
@@ -1235,7 +1336,8 @@ impl FnOp {
                 FnOpAction::Nop
             }
             FnOp::Not { target, source } => {
-                target.set(Some(stack), u_bool(source.get(Some(stack)).truthy()));
+                let value3 = u_bool(source.get(Some(stack)).truthy());
+                target.set(Some(stack), value3);
                 FnOpAction::Nop
             }
             FnOp::SkipIf { condition } => {
@@ -1286,6 +1388,19 @@ impl FnOp {
                     }
                 }
             },
+            FnOp::SetFunctionOffset { to } => FnOpAction::SetFnOffset { to },
+            FnOp::StorePop { target, pop_count } => {
+                assert!(pop_count >= 1);
+                let value1 = stack.stack.stack.pop().unwrap().assume_val();
+                target.set(Some(stack), value1);
+                FnOpAction::Pop(pop_count - 0)
+            }
+            FnOp::Expand { what } => {
+                let mut result = Vec::new();
+                let var = stack.local_at(0);
+                FnOpRepr::call_stack(stack, &what, var, &mut result);
+                FnOpAction::Push(result)
+            }
         };
     }
 }
@@ -1298,6 +1413,8 @@ pub enum FnOpAction {
     Two(StackElement, StackElement),
     Three(StackElement, StackElement, StackElement),
     Four(StackElement, StackElement, StackElement, StackElement),
+    //Five(StackElement, StackElement, StackElement, StackElement, StackElement),
+    //Six(StackElement, StackElement, StackElement, StackElement, StackElement, StackElement),
     CopyStack(usize), // re-append the last n elements
     LoadGlobal {
         // Needed for finding prototypes etc
@@ -1311,9 +1428,12 @@ pub enum FnOpAction {
         target: JsVar,
         what: JsVar,
     },
+    SetFnOffset {
+        to: usize,
+    },
 }
 
-#[derive(Trace, Finalize, Clone)]
+#[derive(Mark, Clone, Debug)]
 pub enum StackElement {
     Value(JsValue),
     HeapVar(JsVar),
@@ -1325,8 +1445,8 @@ impl StackElement {
     pub fn assume_val(&self) -> JsValue {
         match self {
             StackElement::Value(val) => val.clone(),
-            _ => {
-                panic!("stack corruption (5)")
+            any @ _ => {
+                panic!(format!("stack corruption (5) {:?}", any))
             }
         }
     }
@@ -1341,7 +1461,7 @@ impl StackElement {
     }
 }
 
-#[derive(Trace, Finalize, Clone)]
+#[derive(Mark, Clone, Debug)]
 pub enum JsVar {
     Stack {
         pos: usize,
@@ -1364,32 +1484,39 @@ impl JsVar {
     }
 
     pub fn new(name: Rc<String>) -> JsVar {
-        return JsVar::Stack { name, pos: 0 };
+        return JsVar::Heap {
+            name,
+            value: Gc::new(GcCell::new(u_undefined())),
+            defined: true,
+        };
     }
 
     pub fn ensure_heap(&mut self) {
         match self {
-            JsVar::Stack { pos, name } => std::mem::swap(
-                self,
-                &mut JsVar::Heap {
-                    name: name.clone(),
-                    value: Gc::new(GcCell::new(JsValue::Undefined)),
-                    defined: true,
-                },
-            ),
+            JsVar::Stack { pos: _, name } => {
+                let name = name.clone();
+                std::mem::swap(
+                    self,
+                    &mut JsVar::Heap {
+                        name: name.clone(),
+                        value: Gc::new(GcCell::new(JsValue::Undefined)),
+                        defined: true,
+                    },
+                )
+            }
             JsVar::Heap { .. } => {}
         }
     }
 
-    pub fn set(&self, stack: Option<&StackAccess>, val: JsValue) {
+    pub fn set(&self, stack: Option<&mut StackAccess>, val: JsValue) {
         match self {
             JsVar::Stack { pos, .. } => {
-                stack
+                *stack
                     .expect("Stack variable get without stack!")
-                    .read_stack(*pos);
+                    .write_stack_absolute(*pos) = StackElement::Value(val);
             }
             JsVar::Heap { value, .. } => {
-                *value.borrow_mut() = val;
+                *value.borrow().borrow_mut() = val;
             }
         }
     }
@@ -1399,9 +1526,9 @@ impl JsVar {
         match self {
             JsVar::Stack { pos, .. } => stack
                 .expect("Stack variable set without stack!")
-                .read_stack(*pos)
+                .read_stack_absolute(*pos)
                 .assume_val(),
-            JsVar::Heap { value, .. } => return value.borrow_mut().clone(),
+            JsVar::Heap { value, .. } => return value.borrow().borrow_mut().clone(),
         }
     }
 }

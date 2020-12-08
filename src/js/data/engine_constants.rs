@@ -2,7 +2,7 @@ use crate::js::data::js_execution::NativeFunction;
 use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsValue};
 use crate::js::data::stdlib::StdLib;
 use crate::js::data::util::JsObjectBuilder;
-use gc::*;
+use safe_gc::*;
 use std::rc::Rc;
 
 pub struct EngineConstants {
@@ -31,7 +31,7 @@ fn build_symbol(name: Rc<String>, strings: &ConstantStrings, sym_proto: JsValue)
         .build();
 }
 
-#[derive(Trace, Finalize)]
+#[derive(Mark)]
 struct SymbolBuilder {}
 
 impl EngineConstants {
@@ -45,7 +45,7 @@ impl EngineConstants {
         let strings_clone = strings.clone();
 
         impl NativeFunction for SymbolBuilder {
-            fn native_call(&self, this: JsValue, args: JsValue) -> Result<JsValue, JsValue> {
+            fn native_call(&self, _this: JsValue, _args: JsValue) -> Result<JsValue, JsValue> {
                 Ok(JsObjectBuilder::new(None).with_being_symbol().build())
             }
         }
