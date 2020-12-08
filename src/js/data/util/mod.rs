@@ -702,9 +702,25 @@ macro_rules! js_var {
             $right;
         });
     };
-    ($left:block$([$index:block])+[$other:block] = $right:block) => {{
-        b.assign_ref(|b| {}, |b| {}, |b| {});
+    ($left:ident = $right:block) => {{
+        b.var_w(Rc::new(stringify!($left).to_string()), |b| {
+            $right;
+        });
     }};
+    ($left:block$([$index:block])+[$other:block] = $right:block) => {{
+        b.assign_ref(|b| {
+            js_index!($left $([$index])+)
+        }, |b| {$other}, |b| {$right});
+    }};
+    ($left:block[$other:block] = $right:block) => {{
+        b.assign_ref(|b| {
+            $left
+        }, |b| {
+            $other
+        }, |b| {
+            $right
+        });
+    }}
 }
 
 macro_rules! js_if {
@@ -764,9 +780,12 @@ macro_rules! js_number {
 }
 
 macro_rules! js_index {
-    ($of:block[$index:block]) => {
-        b.deref(|b| $of, |b| $index);
+    ($of:block$([$index:block])+[$other:block]) => {
+        {b.deref(|b| {js_index($of$([$index])+)}, |b| {$other});}
     };
+    ($of:block[$index:block]) => {
+        {{b.deref(|b| {$index}, |b| {$other});}}
+    }
 }
 
 fn temp() {
