@@ -5,6 +5,7 @@ pub mod opcode;
 pub mod stack_element;
 pub mod stack_executor;
 pub mod var;
+pub mod constants;
 
 pub struct Stack {
     values: Vec<StackElement>,

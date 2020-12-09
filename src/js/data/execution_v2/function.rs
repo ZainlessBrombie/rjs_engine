@@ -5,6 +5,8 @@ use std::rc::Rc;
 /// The opcodes belonging to a function
 pub struct OpFunction {
     pub instructions: Vec<Op>,
+    /// Number of needed local stack variables, not including this, args etc
+    pub number_of_vars: usize,
     pub meta: FunctionMeta,
 }
 
