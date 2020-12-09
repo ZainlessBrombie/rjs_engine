@@ -8,6 +8,7 @@
     fn type_of(&self) -> dyn JsValue;
 }*/
 
+use crate::js::data::execution_v2::function::FunctionInstance;
 use crate::js::data::js_execution::{FnOpRepr, JsVar, NativeFunction};
 use crate::js::data::util::{s_pool, u_undefined};
 use safe_gc::{Gc, GcCell, Mark};
@@ -69,11 +70,25 @@ pub enum JSCallable {
     NotCallable,
     Js {
         content: Rc<String>,
-        creator: Gc<JsFn>,
+        creator: Rc<FunctionInstance>,
     },
     Native {
         op: Rc<dyn NativeFunction>,
     },
+}
+
+impl Mark for JSCallable {
+    fn mark_all(&self) {
+        unimplemented!()
+    }
+
+    fn unroot(&self) {
+        unimplemented!()
+    }
+
+    fn root(&self) {
+        unimplemented!()
+    }
 }
 
 static IDENTITY_COUNTER: AtomicU64 = AtomicU64::new(0);
