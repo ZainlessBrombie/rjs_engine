@@ -65,7 +65,7 @@ pub struct JsFn {
 
 impl JsFn {}
 
-#[derive(Mark, Clone)]
+#[derive(Clone)]
 pub enum JSCallable {
     NotCallable,
     Js {

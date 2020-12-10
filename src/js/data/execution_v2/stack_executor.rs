@@ -47,7 +47,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
             }
             OpCode::NewObject { is_array } => {
                 let mut object_builder = JsObjectBuilder::new(None);
-                if is_array {
+                if *is_array {
                     object_builder = object_builder.with_being_array();
                 }
                 target_write(&op.target, object_builder.build(), stack, &instance);
@@ -82,7 +82,6 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                                             .heap_vars
                                             .get(*local_heap_var)
                                             .expect("Missing local heap var")
-                                            .get()
                                             .clone()
                                     })
                                     .collect(),
@@ -110,7 +109,8 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                                 Ok(ok_val) => {
                                     *stack
                                         .values
-                                        .get_mut(stack.current_function + RETURN_TO_LOCATION) =
+                                        .get_mut(stack.current_function + RETURN_TO_LOCATION)
+                                        .expect("Unexpected empty stack in native return") =
                                         StackElement::Value(ok_val);
                                 }
                                 Err(err_val) => {
@@ -181,7 +181,8 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                 // return return value
                 *stack
                     .values
-                    .get_mut(stack.current_function + RETURN_TO_LOCATION) =
+                    .get_mut(stack.current_function + RETURN_TO_LOCATION)
+                    .expect("Unexpected empty local stack at return") =
                     StackElement::Value(ret_val);
                 // set head
                 head = stack
@@ -268,13 +269,15 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
 
                 target_write(
                     &op.target,
-                    arithmetic2(left_val, right_val),
+                    arithmetic2(left_val, right_val, *variant),
                     stack,
                     &instance,
                 );
             }
         }
     }
+
+    return consumed;
 }
 
 fn assign_prop(to: JsValue, key: JsValue, value: JsValue) -> Result<JsValue, JsValue> {

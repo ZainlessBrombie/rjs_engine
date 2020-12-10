@@ -21,7 +21,7 @@ impl Default for StackElement {
 
 impl StackElement {
     pub fn assume_head(&mut self) -> FunctionHead {
-        match std::mem::take(&mut self) {
+        match std::mem::take(self) {
             StackElement::FunctionHead(mut head) => head,
             _ => {
                 panic!("Element is not a FunctionHead")

@@ -647,7 +647,6 @@ impl OpBuilder {
     }
 }
 
-#[macro_export]
 macro_rules! js_primitive {
     ($what:ident) => {{
         trait ToJs {
@@ -693,7 +692,6 @@ macro_rules! js_primitive {
     }};
 }
 
-#[macro_export]
 macro_rules! prim_to_val {
     ($what:ident) => {
         (|b: &mut OpBuilder| {
@@ -710,7 +708,6 @@ macro_rules! prim_to_val {
     };
 }
 
-#[macro_export]
 macro_rules! js_prop {
     (($from:expr)$([$key:expr])+[$key2:expr]) => {
         (|b: &mut OpBuilder| {
@@ -732,7 +729,6 @@ macro_rules! js_prop {
     }
 }
 
-#[macro_export]
 macro_rules! js_val {
     (undefined) => {(|b: &mut OpBuilder| {
         b.literal(u_undefined());
@@ -783,7 +779,6 @@ macro_rules! js_val {
     };
 }
 
-#[macro_export]
 macro_rules! js_var {
     ($left:literal = $right:expr) => {
         (|b: &mut OpBuilder| {
@@ -813,7 +808,6 @@ macro_rules! js_var {
     })}
 }
 
-#[macro_export]
 macro_rules! js_if {
         [($cond:expr) {$($st:expr)*}] => {
             (|b: &mut OpBuilder| {b.ifb(|b| {
@@ -824,7 +818,6 @@ macro_rules! js_if {
         };
 }
 
-#[macro_export]
 macro_rules! js_if_else {
     (($cond:expr) {$($ist:expr)*} else {$($est:expr)*}) => {
             (|b: &mut OpBuilder| {b.if_elseb(|b| {
@@ -837,7 +830,6 @@ macro_rules! js_if_else {
     };
 }
 
-#[macro_export]
 macro_rules! js_this {
     () => {
         (|b: &mut OpBuilder| {
@@ -847,7 +839,6 @@ macro_rules! js_this {
     };
 }
 
-#[macro_export]
 macro_rules! js_args {
     () => {
         (|b: &mut OpBuilder| {
@@ -858,7 +849,7 @@ macro_rules! js_args {
 }
 
 // TODO should "this" be a Fn too?
-#[macro_export]
+
 macro_rules! js_call {
     (($what:expr)(this: $this:ident, args: $args:expr)) => {
         (|b: &mut OpBuilder| {
@@ -869,7 +860,6 @@ macro_rules! js_call {
     };
 }
 
-#[macro_export]
 macro_rules! js_undefined {
     () => {
         (|b: &mut OpBuilder| {
@@ -878,7 +868,6 @@ macro_rules! js_undefined {
     };
 }
 
-#[macro_export]
 macro_rules! js_number {
     ($n:literal) => {
         (|b: &mut OpBuilder| {
@@ -892,7 +881,6 @@ macro_rules! js_number {
     };
 }
 
-#[macro_export]
 macro_rules! js_index {
     (($of:expr) $([$index:expr])+[$other:expr]) => {
         {b.deref(|b| {js_index($of$([$index(b)])+)}, |b| {$other(b)});}
@@ -902,7 +890,6 @@ macro_rules! js_index {
     }
 }
 
-#[macro_export]
 macro_rules! js_native {
     (function ($this:ident, $args:ident) {$($content:expr;)*}) => {
         (|b: &mut OpBuilder| {
@@ -923,7 +910,6 @@ macro_rules! js_native {
     };
 }
 
-#[macro_export]
 macro_rules! js_function {
     {$($body:expr)*} => {
         (|b: &mut OpBuilder| {
@@ -934,7 +920,6 @@ macro_rules! js_function {
     };
 }
 
-#[macro_export]
 macro_rules! js_rvar {
     ($name:literal) => {
         (|b: &mut OpBuilder| {
@@ -943,7 +928,6 @@ macro_rules! js_rvar {
     };
 }
 
-#[macro_export]
 macro_rules! js_num_add {
     (($left:expr) + ($right:expr)) => {
         (|b: &mut OpBuilder| {

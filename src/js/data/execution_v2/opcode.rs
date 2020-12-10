@@ -98,6 +98,7 @@ pub enum OpCode {
 }
 
 /// Arithmetic op that takes exactly two parameters
+#[derive(Clone, Copy)]
 pub enum Arithmetic2Op {
     Add,
     Sub,

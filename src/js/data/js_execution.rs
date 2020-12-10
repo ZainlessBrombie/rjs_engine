@@ -1,3 +1,4 @@
+use crate::js::data::execution_v2::function::FunctionInstance;
 use crate::js::data::js_execution::FnOp::Throw;
 use crate::js::data::js_execution::VarAlloc::CapturedAt;
 use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsProperty, JsValue};
@@ -1014,18 +1015,7 @@ impl FnOp {
                     JsValue::Object(obj) => match &obj.borrow().borrow_mut().call {
                         JSCallable::NotCallable => { /*TODO*/ }
                         JSCallable::Js { creator, .. } => {
-                            let borrow = creator.borrow();
-                            let captures = borrow
-                                .captures
-                                .iter()
-                                .map(|captured| StackElement::HeapVar(captured.clone()));
-                            result.extend(captures);
-                            result.push(StackElement::Op(FnOp::Expand {
-                                what: creator.borrow().ops.clone(),
-                            }));
-                            result.push(StackElement::Op(FnOp::SetFunctionOffset {
-                                to: upcoming_pos,
-                            }));
+                            unimplemented!();
                         }
                         JSCallable::Native { op } => {
                             match op.call(this.get(Some(stack)), args.get(Some(stack))) {
@@ -1408,10 +1398,7 @@ impl FnOp {
                 let f = JsObjectBuilder::new(None)
                     .with_callable(JSCallable::Js {
                         content: Rc::new("".to_string()),
-                        creator: Gc::new(JsFn {
-                            ops: code,
-                            captures,
-                        }),
+                        creator: unimplemented!(),
                     })
                     .build();
                 target.set(Some(stack), f);
