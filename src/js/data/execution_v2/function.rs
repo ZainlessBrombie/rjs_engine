@@ -15,9 +15,9 @@ pub struct OpFunction {
 /// Later, other fields may be added, like hits or
 /// caches for optimization
 pub struct FunctionMeta {
-    line_map: Vec<usize>,    // opcode to line
-    column_map: Vec<usize>,  // Opcode to column in line
-    code_source: CodeSource, // Source code file
+    pub(crate) line_map: Vec<usize>,    // opcode to line
+    pub(crate) column_map: Vec<usize>,  // Opcode to column in line
+    pub(crate) code_source: CodeSource, // Source code file
 }
 
 /// Code source that can be displayed.

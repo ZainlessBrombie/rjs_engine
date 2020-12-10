@@ -1,5 +1,6 @@
 use crate::js::data::execution_v2::function::FunctionExecution;
 use crate::js::data::js_types::{Identity, JsValue};
+use crate::js::data::execution_v2::var::JsVar;
 
 pub struct FunctionHead {
     pub prev_function: usize,
@@ -7,6 +8,7 @@ pub struct FunctionHead {
 }
 
 pub enum StackElement {
+    HeapVar(JsVar),
     Value(JsValue),
     FunctionHead(FunctionHead),
     /// We want to be able to own Elements, so that be can own the current execution.

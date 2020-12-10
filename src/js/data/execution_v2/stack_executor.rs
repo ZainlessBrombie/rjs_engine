@@ -9,6 +9,8 @@ use safe_gc::{Gc, GcCell};
 use std::borrow::BorrowMut;
 use std::f64::NAN;
 use std::rc::Rc;
+use crate::js::data::js_execution::StackAccess;
+use crate::js::data::execution_v2::var::JsVar;
 
 pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
     let mut consumed = 0;
@@ -77,12 +79,14 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                                 captures
                                     .iter()
                                     .map(|local_heap_var| {
-                                        head.execution
-                                            .instance
-                                            .heap_vars
-                                            .get(*local_heap_var)
-                                            .expect("Missing local heap var")
-                                            .clone()
+                                        match local_heap_var {
+                                            Target::Heap(heap_var) => {
+
+                                            },
+                                            Target::Stack(_) => {}
+                                            Target::Global(_) => {}
+                                            Target::BlackHole => {}
+                                        }
                                     })
                                     .collect(),
                             ),
@@ -278,6 +282,24 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
     }
 
     return consumed;
+}
+
+fn capture_heap_var(target: &Target, stack: &mut Stack, head: &FunctionHead) -> JsVar {
+    match target {
+        Target::Stack(stack_index) => {
+            match stack.values.get(stack.current_function + *stack_index)
+                .expect("Unexpected stack shortness") {
+                StackElement::HeapVar(v) => {v.clone()},
+                _ => panic!("If a variable is captured from stack, it has to be a heap var")
+            }
+        }
+        Target::Global(_) => {
+            panic!("cannot capture a global, that makes no sense!")
+        }
+        Target::BlackHole => {
+            panic!("Cannot capture a black hole target!")
+        }
+    }
 }
 
 fn assign_prop(to: JsValue, key: JsValue, value: JsValue) -> Result<JsValue, JsValue> {

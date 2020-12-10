@@ -12,10 +12,8 @@ pub struct Op {
 
 /// A memory target for a value read or write
 pub enum Target {
-    /// Stack pointer
+    /// Stack pointer. May be a Value (used as a variable) or a Heap Var
     Stack(usize),
-    /// Captures; Captured
-    Heap(usize),
     /// Global object is stored at stack 0
     Global(Rc<String>),
     /// Don't put value anywhere. Undefined read, nop write.
@@ -46,8 +44,8 @@ pub enum OpCode {
     CreateFunction {
         template: Rc<OpFunction>,
         /// Ordered list of captures to read.
-        /// Indexes into our heap vars
-        captures: Vec<usize>,
+        /// Indexes into our local stack varspace, as it will contain captures itself.
+        captures: Vec<Target>,
     },
     Call {
         what: Target,
@@ -65,6 +63,9 @@ pub enum OpCode {
         key: Target,
     },
     Nop {},
+    Transfer {
+        from: Target,
+    },
     FuzzyCompare {
         left: Target,
         right: Target,
