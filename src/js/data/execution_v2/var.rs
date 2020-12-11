@@ -7,8 +7,8 @@ use std::rc::Rc;
 /// we want to keep a name.
 #[derive(Clone)]
 pub struct JsVar {
-    name: Rc<String>,
-    value: Gc<GcCell<JsValue>>,
+    pub(crate) name: Rc<String>,
+    pub(crate) value: Gc<GcCell<JsValue>>,
 }
 
 impl JsVar {

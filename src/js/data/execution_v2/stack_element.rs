@@ -1,6 +1,6 @@
 use crate::js::data::execution_v2::function::FunctionExecution;
-use crate::js::data::js_types::{Identity, JsValue};
 use crate::js::data::execution_v2::var::JsVar;
+use crate::js::data::js_types::{Identity, JsValue};
 
 pub struct FunctionHead {
     pub prev_function: usize,
@@ -35,7 +35,7 @@ impl StackElement {
         std::mem::swap(self, &mut StackElement::FunctionHead(head))
     }
 
-    pub fn assume_value(&mut self) -> JsValue {
+    pub fn assume_value(&self) -> JsValue {
         match self {
             StackElement::Value(v) => v.clone(),
             _ => {

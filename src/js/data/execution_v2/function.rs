@@ -39,6 +39,5 @@ pub struct FunctionExecution {
     /// Jump here if an exception occurs.
     /// 0 if not in try catch (since 0 is not valid for catch anyways)
     pub catch_pointer: usize,
-    pub flag: bool,
     pub instance: Rc<FunctionInstance>,
 }

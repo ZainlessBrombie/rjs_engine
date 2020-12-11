@@ -1,16 +1,16 @@
-use crate::js::data::execution_v2::constants::{BEGIN_VARS, HEAD_LOCATION, RETURN_TO_LOCATION};
+use crate::js::data::execution_v2::constants::{
+    BEGIN_VARS, HEAD_LOCATION, JUMP_FLAG_LOCATION, RETURN_TO_LOCATION,
+};
 use crate::js::data::execution_v2::function::{FunctionExecution, FunctionInstance};
 use crate::js::data::execution_v2::opcode::{Arithmetic2Op, OpCode, Target};
 use crate::js::data::execution_v2::stack_element::{FunctionHead, StackElement};
+use crate::js::data::execution_v2::var::JsVar;
 use crate::js::data::execution_v2::Stack;
 use crate::js::data::js_types::{JSCallable, JsProperty, JsValue};
 use crate::js::data::util::{s_pool, u_bool, u_number, u_string, JsObjectBuilder};
 use safe_gc::{Gc, GcCell};
-use std::borrow::BorrowMut;
 use std::f64::NAN;
 use std::rc::Rc;
-use crate::js::data::js_execution::StackAccess;
-use crate::js::data::execution_v2::var::JsVar;
 
 pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
     let mut consumed = 0;
@@ -43,7 +43,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                 head.execution.op_pointer = *to;
             }
             OpCode::ConditionalJump { to } => {
-                if head.execution.flag {
+                if target_read(&Target::Stack(JUMP_FLAG_LOCATION), stack, &instance).truthy() {
                     head.execution.op_pointer = *to;
                 }
             }
@@ -78,15 +78,18 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                             heap_vars: Rc::new(
                                 captures
                                     .iter()
-                                    .map(|local_heap_var| {
-                                        match local_heap_var {
-                                            Target::Heap(heap_var) => {
-
-                                            },
-                                            Target::Stack(_) => {}
-                                            Target::Global(_) => {}
-                                            Target::BlackHole => {}
+                                    .map(|local_heap_var| match local_heap_var {
+                                        Target::Stack(var) => {
+                                            match stack
+                                                .values
+                                                .get(stack.current_function + *var)
+                                                .expect("Heap to short (unexpected)")
+                                            {
+                                                StackElement::HeapVar(var) => var.clone(),
+                                                _ => panic!("Uncapturable element!"),
+                                            }
                                         }
+                                        _ => panic!("Uncapturable target!"),
                                     })
                                     .collect(),
                             ),
@@ -139,7 +142,6 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                     execution: FunctionExecution {
                         op_pointer: 0,
                         catch_pointer: 0,
-                        flag: false,
                         instance: new_instance.clone(),
                     },
                 };
@@ -278,6 +280,12 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                     &instance,
                 );
             }
+            OpCode::Transfer { from } => target_write(
+                &op.target,
+                target_read(from, stack, &instance),
+                stack,
+                &instance,
+            ),
         }
     }
 
@@ -287,10 +295,13 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
 fn capture_heap_var(target: &Target, stack: &mut Stack, head: &FunctionHead) -> JsVar {
     match target {
         Target::Stack(stack_index) => {
-            match stack.values.get(stack.current_function + *stack_index)
-                .expect("Unexpected stack shortness") {
-                StackElement::HeapVar(v) => {v.clone()},
-                _ => panic!("If a variable is captured from stack, it has to be a heap var")
+            match stack
+                .values
+                .get(stack.current_function + *stack_index)
+                .expect("Unexpected stack shortness")
+            {
+                StackElement::HeapVar(v) => v.clone(),
+                _ => panic!("If a variable is captured from stack, it has to be a heap var"),
             }
         }
         Target::Global(_) => {
@@ -310,7 +321,8 @@ fn assign_prop(to: JsValue, key: JsValue, value: JsValue) -> Result<JsValue, JsV
         JsValue::Boolean(_) => Ok(key),
         JsValue::String(_) => Ok(key),
         JsValue::Object(obj) => {
-            let obj_ref = GcCell::borrow_mut(&Gc::borrow(&obj));
+            let gc_ref = Gc::borrow(&obj);
+            let mut obj_ref = GcCell::borrow_mut(&gc_ref);
 
             if key.is_symbol() {
                 obj_ref.symbol_keys.insert(
@@ -416,12 +428,15 @@ fn proto_inclusive_read(
                 }
             }
             JsValue::Object(ref obj) => {
-                let obj_borrow = GcCell::borrow(&Gc::borrow(&obj));
+                let gc_ref = Gc::borrow(&obj);
+                let obj_borrow = GcCell::borrow(&gc_ref);
 
                 if key.is_symbol() {
                     if let Some(found_value) = obj_borrow.symbol_keys.get(&key) {
                         return Ok(found_value.value.clone());
                     } else {
+                        std::mem::drop(obj_borrow);
+                        std::mem::drop(gc_ref);
                         source = proto_inclusive_read(
                             source,
                             u_string("__proto__"),
@@ -434,6 +449,8 @@ fn proto_inclusive_read(
                     if let Some(found_value) = obj_borrow.content.get(&key.to_system_string()) {
                         return Ok(found_value.value.clone());
                     } else {
+                        std::mem::drop(obj_borrow);
+                        std::mem::drop(gc_ref);
                         source = proto_inclusive_read(
                             source,
                             u_string("__proto__"),
@@ -508,15 +525,11 @@ fn target_read(
                 StackElement::Value(value) => {
                     return value.clone();
                 }
+                StackElement::HeapVar(v) => {
+                    return v.get();
+                }
                 _ => panic!("Expected value at stack location"),
             }
-        }
-        Target::Heap(heap_index) => {
-            return current_function
-                .heap_vars
-                .get(*heap_index)
-                .expect("Unexpected missing heap var entry")
-                .get();
         }
         Target::Global(global_name) => {
             match &stack
@@ -581,17 +594,17 @@ fn target_write(
 ) {
     match target {
         Target::Stack(stack_pointer) => {
-            *stack
+            match stack
                 .values
                 .get_mut(*stack_pointer)
-                .expect("Unexpected stack size") = StackElement::Value(what);
-        }
-        Target::Heap(heap_index) => {
-            current_function
-                .heap_vars
-                .get(*heap_index)
-                .expect("Unexpected missing heap var entry")
-                .set(what);
+                .expect("Unexpected stack size")
+            {
+                StackElement::HeapVar(heap) => {
+                    heap.set(what);
+                }
+                el @ StackElement::Value(_) => *el = StackElement::Value(what),
+                _ => panic!("Cannot write to incorrect heap part"),
+            };
         }
         Target::Global(global_name) => {
             match &stack

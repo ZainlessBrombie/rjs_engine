@@ -12,23 +12,31 @@ use crate::*;
 use std::collections::{HashMap, HashSet};
 use std::process::exit;
 use std::rc::Rc;
-use swc_ecma_ast::{BinaryOp, Decl, Expr, Function, ModuleItem, Pat, Stmt, VarDeclOrExpr};
+use swc_ecma_ast::{
+    BinaryOp, Decl, EmptyStmt, Expr, Function, ModuleItem, Pat, Stmt, VarDeclOrExpr,
+};
 
 thread_local! {
     static THIS_ID: Identity = Identity::new();
     static ARGS_ID: Identity = Identity::new();
 }
 
-pub fn parse_module(module: swc_ecma_ast::Module, vars: &mut VarAccess) -> Module {
+pub fn parse_module(module: swc_ecma_ast::Module, vars: &'a mut VarAccess<'a>) -> Action {
+    let mut ret = Vec::new();
     for item in module.body {
         match item {
             ModuleItem::ModuleDecl(_) => {
                 println!("Module Decl not supported");
             }
-            ModuleItem::Stmt(stmt) => {}
+            ModuleItem::Stmt(stmt) => {
+                ret.push(parse_stmt(stmt, vars));
+            }
         }
     }
-    unimplemented!()
+    return Action::Block(Box::from(ScopedBlock {
+        content: ret,
+        location: CodeLoc { line: 0, column: 0 },
+    }));
 }
 
 fn parse_stmt(stmt: Stmt, access: &'a mut VarAccess<'a>) -> LocatedAction {
@@ -36,7 +44,7 @@ fn parse_stmt(stmt: Stmt, access: &'a mut VarAccess<'a>) -> LocatedAction {
         Stmt::Block(block) => {
             let mut action = Vec::new();
             for stmt in block.stmts {
-                action.push(parse_stmt(stmt, &mut VarAccess::empty(Some(access), false)));
+                action.push(parse_stmt(stmt, &mut access.child(false)));
             }
             return LocatedAction {
                 action: Action::Block(Box::new(ScopedBlock {
@@ -66,10 +74,15 @@ fn parse_stmt(stmt: Stmt, access: &'a mut VarAccess<'a>) -> LocatedAction {
         Stmt::Break(_) => {}
         Stmt::Continue(_) => {}
         Stmt::If(if_block) => {
-            return js_if_else!((js_action_lit!(a, parse_expr(*if_block.test, a))) {
-                js_action_lit!(a, parse_stmt(*if_block.cons, a))
+            let test = *if_block.test;
+            let cons = *if_block.cons;
+            let alt = *if_block.alt.unwrap_or(Box::new(Stmt::Empty(EmptyStmt {
+                span: Default::default(),
+            })));
+            return js_if_else!((js_action_lit!(a, parse_expr(test, a))) {
+                js_action_lit!(a, parse_stmt(cons, a))
             } else {
-                js_action_lit!(a, parse_stmt(*if_block.cons, a))
+                js_action_lit!(a, parse_stmt(alt, a))
             })(access);
         }
         Stmt::Switch(_) => {}
@@ -121,7 +134,7 @@ fn parse_stmt(stmt: Stmt, access: &'a mut VarAccess<'a>) -> LocatedAction {
         Stmt::Decl(decl) => match decl {
             Decl::Class(_) => {}
             Decl::Fn(f) => {
-                let mut access = VarAccess::empty(Some(access), true);
+                let mut access = access.child(true);
                 return parse_function(f.function, &mut access);
             }
             Decl::Var(var_decl) => {
@@ -297,6 +310,7 @@ fn parse_function(f: Function, access: &'a mut VarAccess<'a>) -> LocatedAction {
                 })),
                 location: CodeLoc { line: 0, column: 0 },
             },
+            captures: access.known_heap_vars(),
         })),
         location: CodeLoc { line: 0, column: 0 },
     };
@@ -316,10 +330,7 @@ fn parse_var_decl(mut decl: swc_ecma_ast::VarDecl, access: &'a mut VarAccess<'a>
                 .map(|init| parse_expr(*init, a))
                 .unwrap_or(LocatedAction {
                     action: Action::Literal(JsValue::Undefined),
-                    location: CodeLoc {
-                        column: 0,
-                        line: 0
-                    }
+                    location: CodeLoc { column: 0, line: 0 }
                 })
         )
     )(access);

@@ -1,13 +1,15 @@
 extern crate swc_ecma_parser;
 use self::swc_ecma_parser::JscTarget;
 use crate::js::data::execution_v2::function::FunctionInstance;
+use crate::js::data::execution_v2::stack_executor::run_stack;
+use crate::js::data::intermediate::converter::build_function;
 use crate::js::data::intermediate::VarAccess;
+use crate::js::data::js_execution::JsVar::Stack;
 use crate::js::data::js_execution::{EngineState, NativeFunction};
 use crate::js::data::js_types::{JSCallable, JsFn, JsValue};
 use crate::js::data::parsing::parse_module;
 use crate::js::data::util::{
-    s_pool, u_bool, u_null, u_number, u_string, u_true, u_undefined, JsObjectBuilder, OpBuilder,
-    VType,
+    s_pool, u_bool, u_null, u_number, u_string, u_true, u_undefined, JsObjectBuilder, VType,
 };
 use crate::*;
 use safe_gc::{GcCell, Mark};
@@ -109,26 +111,11 @@ pub fn m1() {
         })
         .unwrap();
 
-    let mut engine = JsEngine {
-        eng: Box::new(JsEngineInternal {
-            max_mem: 10000,
-            cur_mem: Default::default(),
-            state: engine_state,
-        }),
-    };
-    let mut access = VarAccess::empty(None, false);
+    let mut access = VarAccess::empty();
     let module = parse_module(module, &mut access);
-    engine.eng.state.get_queuer().enqueue_js_fn(
-        JsObjectBuilder::new(None)
-            .with_callable(JSCallable::Js {
-                content: Rc::new("".to_string()),
-                creator: Rc::new(FunctionInstance {
-                    code: Rc::new(OpFunction {}),
-                    heap_vars: Rc::new(vec![]),
-                }),
-            })
-            .build(),
-    );
+    let mut stack = js::data::execution_v2::Stack::create_stack(build_function(module));
 
-    engine.eng.state.run_queue(1000);
+    let consumed = run_stack(&mut stack, 10000);
+
+    println!("Consumed: {}", consumed);
 }

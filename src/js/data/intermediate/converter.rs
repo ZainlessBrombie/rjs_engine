@@ -22,7 +22,7 @@ pub fn build_function(action: Action) -> JsValue {
                     meta: FunctionMeta {
                         line_map: vec![],
                         column_map: vec![],
-                        code_source: CodeSource::String(Rc::new("".into_string())),
+                        code_source: CodeSource::String(Rc::new("".into())),
                     },
                 }),
                 heap_vars: Rc::new(vec![]),

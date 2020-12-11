@@ -1,8 +1,10 @@
-mod converter;
+pub mod converter;
 mod macros;
 
 use crate::js::data::execution_v2::opcode::Arithmetic2Op;
 use crate::js::data::js_types::{Identity, JsValue};
+use crate::js::data::self_time::SelfTime;
+use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -135,21 +137,35 @@ struct VarRef {
     is_local: bool,
 }
 
-pub struct VarAccess<'a> {
-    known_heap_vars: HashSet<Identity>,
-    prev: Option<&'a mut VarAccess<'a>>,
-    vars: HashMap<Rc<String>, VarRef>,
-    stack_breaker: bool,
-}
-
 impl<'a> VarAccess<'a> {
-    pub fn empty(prev: Option<&'a mut VarAccess<'a>>, stack_breaker: bool) -> VarAccess<'a> {
+    pub fn empty() -> VarAccess<'a> {
+        let self_time = SelfTime::new();
+        return VarAccess {
+            known_heap_vars: Default::default(),
+            prev: None,
+            vars: Default::default(),
+            stack_breaker: false,
+            keep_alive: self_time,
+        };
+    }
+
+    pub fn child<'b>(&'a self, stack_breaker: bool) -> &'a mut VarAccess<'b>
+    where
+        'b: 'a,
+    {
+        let time = Default::default();
         VarAccess {
             known_heap_vars: Default::default(),
-            prev,
+            prev: None,
             vars: Default::default(),
             stack_breaker,
-        }
+            keep_alive: time,
+        };
+        unimplemented!()
+    }
+
+    pub fn known_heap_vars(&self) -> Vec<Identity> {
+        self.known_heap_vars.iter().map(|i| i.clone()).collect()
     }
 
     pub fn get_or_global(&mut self, name: &Rc<String>) -> Identity {
@@ -165,7 +181,7 @@ impl<'a> VarAccess<'a> {
             }
             return ret.id.clone();
         } else {
-            if let Some(prev) = self.prev {
+            if let Some(prev) = &mut self.prev {
                 let ret = prev.get_or_global_internal(name, stack_broken || self.stack_breaker);
                 if self.stack_breaker {
                     self.known_heap_vars.insert(ret.clone());
@@ -198,25 +214,40 @@ impl<'a> VarAccess<'a> {
     }
 }
 
-fn lifetimed<'a>(
-    f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-    return f;
+pub struct VarAccess<'a> {
+    known_heap_vars: HashSet<Identity>,
+    prev: Option<RefMut<'a, VarAccess<'a>>>,
+    vars: HashMap<Rc<String>, VarRef>,
+    stack_breaker: bool,
+    keep_alive: SelfTime<'a>, // Just keep em all
+}
+
+#[macro_export]
+macro_rules! lifetimed {
+    ($f:expr) => {{
+        fn lifetimed<'a, 'b>(
+            f: impl FnOnce(&'a mut VarAccess<'b>) -> LocatedAction,
+        ) -> impl FnOnce(&'a mut VarAccess<'b>) -> LocatedAction
+        where
+            'b: 'a,
+        {
+            return f;
+        }
+        lifetimed($f)
+    }};
 }
 
 #[macro_export]
 macro_rules! js_block {
     {$($st:expr)*} => {
         {
-            fn lifetimed<'a>(f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-                return f;
-            }
-            lifetimed((|a| {
-                let mut access = VarAccess::empty(Some(a), false);
+            lifetimed!((|a| {
+                let mut access = a.child(false);
+
                 let ret = LocatedAction {
                     action: Action::Block(Box::from(ScopedBlock {
                         content: vec![
-                            $($st(&mut a),)*
+                            $($st(access),)*
                         ],
                         location: CodeLoc { line: 0, column: 0 }
                     })),
@@ -232,21 +263,21 @@ macro_rules! js_block {
 macro_rules! js_if_else {
     (($cond:expr) {$($ist:expr)*} else {$($est:expr)*}) => {
         {
-            fn lifetimed<'a>(f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-                return f;
-            }
-            lifetimed((|a| {
+            lifetimed!((|a| {
+                let condition = $cond(a.child(false));
+                let if_block = js_block! {
+                                    $($ist)*
+                               }(a.child(false));
+                let else_block = js_block! {
+                                    $($est)*
+                                 }(a.child(false));
                 LocatedAction {
                     location: CodeLoc { line: 0, column: 0 },
                     action: Action::IfElse(Box::new(IfElse {
-                        condition: $cond(a),
+                        condition,
 
-                        if_block: js_block! {
-                                $($ist)*
-                            }(&mut VarAccess::empty(Some(a), false)),
-                        else_block: js_block! {
-                                $($est)*
-                            }(&mut VarAccess::empty(Some(a), false))
+                        if_block,
+                        else_block
                     }))
                 }
             }))
@@ -258,10 +289,7 @@ macro_rules! js_if_else {
 macro_rules! js_if {
     (($cond:expr) {$($ist:expr)*}) => {
         {
-            fn lifetimed<'a>(f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-                return f;
-            }
-            (|a: &mut VarAccess| {
+            lifetimed!(|a: &mut VarAccess| {
                 js_if_else!(($cond) {$($ist:expr)*} else {})(a)
             })
         }
@@ -271,12 +299,7 @@ macro_rules! js_if {
 #[macro_export]
 macro_rules! js_action_lit {
     ($a:ident, $ex:expr) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed((|$a| $ex))
+        lifetimed!((|$a| $ex))
     }};
 }
 
@@ -284,10 +307,7 @@ macro_rules! js_action_lit {
 macro_rules! js_while {
     (($cond:expr) {$($body:expr)*}) => {
         {
-            fn lifetimed<'a>(f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-                return f;
-            }
-            lifetimed((|a: &mut VarAccess| LocatedAction {
+            lifetimed!((|a: &mut VarAccess| LocatedAction {
                 action: Action::While(Box::from(While {
                     condition: $cond(a),
                     body: js_block! {$($body)*}(a)
@@ -302,11 +322,8 @@ macro_rules! js_while {
 macro_rules! js_for {
     (($init:expr; $condition:expr; $update:expr) {$($body:expr)*}) => {
         {
-            fn lifetimed<'a>(f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-                return f;
-            }
-            lifetimed((|a| {
-                let a = VarAccess::empty(Some(a), false);
+            lifetimed!((|a| {
+                let a = a.child(false);
                 LocatedAction {
                     action: Action::For(Box::from(For {
                         initializer: $init(&mut a),
@@ -324,12 +341,7 @@ macro_rules! js_for {
 #[macro_export]
 macro_rules! js_bin {
     (($left:expr) == ($right:expr)) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a: &mut VarAccess| LocatedAction {
+        lifetimed!(|a: &mut VarAccess| LocatedAction {
             action: Action::FuzzyCompare(Box::new(LeftRight {
                 left: $left(a),
                 right: $right(a),
@@ -338,12 +350,7 @@ macro_rules! js_bin {
         })
     }};
     (($left:expr) === ($right:expr)) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a| LocatedAction {
+        lifetimed!(|a| LocatedAction {
             action: Action::StrictCompare(Box::new(LeftRight {
                 left: $left(a),
                 right: $right(a),
@@ -352,12 +359,7 @@ macro_rules! js_bin {
         })
     }};
     (($left:expr) != ($right:expr)) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a| LocatedAction {
+        lifetimed!(|a| LocatedAction {
             action: Action::BoolNot(Box::new(LocatedAction {
                 action: Action::FuzzyCompare(Box::new(LeftRight {
                     left: $left(a),
@@ -369,12 +371,7 @@ macro_rules! js_bin {
         })
     }};
     (($left:expr) !== ($right:expr)) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a| LocatedAction {
+        lifetimed!(|a| LocatedAction {
             action: Action::BoolNot(Box::new(LocatedAction {
                 action: Action::StrictCompare(Box::new(LeftRight {
                     left: $left(a),
@@ -386,12 +383,7 @@ macro_rules! js_bin {
         })
     }};
     (($left:expr) + ($right:expr)) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a| LocatedAction {
+        lifetimed!(|a| LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
                     left: $left(a),
@@ -403,12 +395,7 @@ macro_rules! js_bin {
         })
     }};
     (($left:expr) - ($right:expr)) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a| LocatedAction {
+        lifetimed!(|a| LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
                     left: $left(a),
@@ -420,12 +407,7 @@ macro_rules! js_bin {
         })
     }};
     (($left:expr) * ($right:expr)) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a| LocatedAction {
+        lifetimed!(|a| LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
                     left: $left(a),
@@ -437,12 +419,7 @@ macro_rules! js_bin {
         })
     }};
     (($left:expr) / ($right:expr)) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a| LocatedAction {
+        lifetimed!(|a| LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
                     left: $left(a),
@@ -454,12 +431,7 @@ macro_rules! js_bin {
         })
     }};
     (($left:expr) ** ($right:expr)) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a| LocatedAction {
+        lifetimed!(|a| LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
                     left: $left(a),
@@ -531,12 +503,7 @@ macro_rules! js_primitive {
 #[macro_export]
 macro_rules! js_static {
     ($val:expr) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a| LocatedAction {
+        lifetimed!(|a| LocatedAction {
             action: Action::Literal($val),
             location: CodeLoc { line: 0, column: 0 },
         })
@@ -546,12 +513,7 @@ macro_rules! js_static {
 #[macro_export]
 macro_rules! js_var {
     (($name:expr) = $to:expr) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a| LocatedAction {
+        lifetimed!(|a| LocatedAction {
             action: Action::VariableAssign(Box::new(VarAssign {
                 var: $name,
                 right_side: Box::new($to(a)),
@@ -560,12 +522,7 @@ macro_rules! js_var {
         })
     }};
     ($name:expr) => {{
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a| LocatedAction {
+        lifetimed!(|a| LocatedAction {
             action: Action::ReadVar($name),
             location: CodeLoc { line: 0, column: 0 },
         })
@@ -575,24 +532,14 @@ macro_rules! js_var {
 #[macro_export]
 macro_rules! js_prop {
     (($of:expr) $([$index:expr])+[$other:expr]) => {
-        fn lifetimed<'a>(
-            f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-        ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-            return f;
-        }
-        lifetimed(|a| Action::ReadProp(Box::new(ReadProp {
+        lifetimed!(|a| Action::ReadProp(Box::new(ReadProp {
             from: (js_index(($of) $([$index])+))(a),
             key: $other(a)
         })))
     };
     (($of:expr)[$index:expr]) => {
         {
-            fn lifetimed<'a>(
-                f: impl Fn(&'a mut VarAccess<'a>) -> LocatedAction,
-            ) -> impl Fn(&'a mut VarAccess<'a>) -> LocatedAction {
-                return f;
-            }
-            lifetimed(|a| LocatedAction{ action: Action::ReadProp(Box::new(crate::js::data::intermediate::ReadProp {
+            lifetimed!(|a| LocatedAction{ action: Action::ReadProp(Box::new(crate::js::data::intermediate::ReadProp {
                 from: $of(a),
                 key: $index(a)
             })), location: CodeLoc {line:0, column: 0}})
