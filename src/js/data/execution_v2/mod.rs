@@ -1,13 +1,14 @@
+use crate::js::data::execution_v2::constants::BEGIN_VARS;
 use crate::js::data::execution_v2::function::{
     CodeSource, FunctionExecution, FunctionInstance, FunctionMeta, OpFunction,
 };
 use crate::js::data::execution_v2::opcode::{Op, OpCode, Target};
 use crate::js::data::execution_v2::stack_element::{FunctionHead, StackElement};
 use crate::js::data::execution_v2::var::JsVar;
-use crate::js::data::util::JsObjectBuilder;
+use crate::js::data::js_types::JsValue;
+use crate::js::data::util::{s_pool, JsObjectBuilder};
 use safe_gc::{Gc, GcCell};
 use std::rc::Rc;
-use crate::js::data::js_types::JsValue;
 
 pub mod constants;
 pub mod function;
@@ -25,7 +26,11 @@ impl Stack {
     pub fn create_stack(function: JsValue) -> Stack {
         let global = JsVar {
             name: Rc::new("".to_string()),
-            value: Gc::new(GcCell::new(JsObjectBuilder::new(None).build())),
+            value: Gc::new(GcCell::new(
+                JsObjectBuilder::new(None)
+                    .with_prop(Rc::new("type".into()), JsValue::String(s_pool("global")))
+                    .build(),
+            )),
         };
         let function = JsVar {
             name: Rc::new("".to_string()),
@@ -33,8 +38,7 @@ impl Stack {
         };
         Stack {
             values: vec![
-                StackElement::HeapVar(global),
-                StackElement::HeapVar(function),
+                StackElement::Value(global.get()),
                 StackElement::FunctionHead(FunctionHead {
                     prev_function: 0,
                     execution: FunctionExecution {
@@ -42,15 +46,23 @@ impl Stack {
                         catch_pointer: 0,
                         instance: Rc::new(FunctionInstance {
                             code: Rc::new(OpFunction {
-                                instructions: vec![Op {
-                                    target: Target::Stack(1),
-                                    code: OpCode::Call {
-                                        what: Target::BlackHole,
-                                        this: Target::BlackHole,
-                                        args: Target::BlackHole,
+                                instructions: vec![
+                                    Op {
+                                        target: Target::Stack(1),
+                                        code: OpCode::Call {
+                                            what: Target::Stack(BEGIN_VARS),
+                                            this: Target::BlackHole,
+                                            args: Target::Stack(BEGIN_VARS + 1),
+                                        },
                                     },
-                                }],
-                                number_of_vars: 2,
+                                    Op {
+                                        target: Target::BlackHole,
+                                        code: OpCode::Return {
+                                            what: Target::BlackHole,
+                                        },
+                                    },
+                                ],
+                                number_of_vars: 10,
                                 meta: FunctionMeta {
                                     line_map: vec![],
                                     column_map: vec![],
@@ -61,8 +73,20 @@ impl Stack {
                         }),
                     },
                 }),
+                StackElement::Value(JsValue::Undefined),
+                StackElement::Value(JsValue::Undefined),
+                StackElement::Value(JsValue::Undefined),
+                StackElement::Value(JsValue::Undefined),
+                StackElement::HeapVar(function),
+                StackElement::Value(
+                    JsObjectBuilder::new(None)
+                        .with_prop(s_pool("type"), JsValue::String(s_pool("init_arr")))
+                        .build(),
+                ),
+                StackElement::Value(JsValue::Undefined),
+                StackElement::Value(JsValue::Undefined),
             ],
-            current_function: 0,
+            current_function: 1,
         }
     }
 }

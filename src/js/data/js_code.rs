@@ -112,8 +112,9 @@ pub fn m1() {
         .unwrap();
 
     let mut access = empty_var_access(None, false);
+    let console = access.get_or_global(&s_pool("console"));
     let module = parse_module(module, access);
-    let mut stack = js::data::execution_v2::Stack::create_stack(build_function(module));
+    let mut stack = js::data::execution_v2::Stack::create_stack(build_function(module, console));
 
     let consumed = run_stack(&mut stack, 10000);
 

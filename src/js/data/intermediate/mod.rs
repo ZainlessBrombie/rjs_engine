@@ -40,6 +40,7 @@ pub enum Action {
     Break(Break),
     Labeled(Labeled),
     ReadProp(Box<ReadProp>),
+    AssignProp(Box<AssignProp>),
     IfElse(Box<IfElse>),
     While(Box<While>),
     For(Box<For>),
@@ -71,6 +72,12 @@ pub struct InstantiateFunction {
     //args: Vec<Action>,
     pub(crate) content: LocatedAction,
     pub(crate) captures: Vec<Identity>,
+}
+
+pub struct AssignProp {
+    pub(crate) to: LocatedAction,
+    pub(crate) key: LocatedAction,
+    pub(crate) what: LocatedAction,
 }
 
 pub struct NewObject {
@@ -111,9 +118,9 @@ pub struct ReadProp {
 }
 
 pub struct CallFunction {
-    pub(crate) this: Option<Action>,
-    pub(crate) member: Action, // Used as key if this is Some
-    pub(crate) args: Action,
+    pub(crate) this: Option<LocatedAction>,
+    pub(crate) member: LocatedAction, // Used as key if this is Some
+    pub(crate) args: LocatedAction,
 }
 
 pub struct VarDecl {
@@ -157,6 +164,8 @@ pub trait VarAccessTrait {
     fn get_or_global_internal(&mut self, name: &Rc<String>, stack_broken: bool) -> Identity;
 
     fn local_declare(&mut self, name: Rc<String>) -> Identity;
+
+    fn register_local(&self, id: Identity);
 }
 
 impl VarAccessTrait for Rc<RefCell<VarAccess>> {
@@ -168,36 +177,47 @@ impl VarAccessTrait for Rc<RefCell<VarAccess>> {
             .collect()
     }
 
+    fn register_local(&self, id: Identity) {
+        let mut ref_mut = self.borrow_mut();
+        if ref_mut.stack_breaker {
+            ref_mut.known_heap_vars.insert(id);
+        } else if let Some(prev) = &ref_mut.prev {
+            prev.register_local(id);
+        }
+    }
+
     fn get_or_global(&mut self, name: &Rc<String>) -> Identity {
         self.get_or_global_internal(name, false)
     }
 
     /// stack_broken means we have crossed a heap boundary and need to capture.
     fn get_or_global_internal(&mut self, name: &Rc<String>, stack_broken: bool) -> Identity {
-        if let Some(ret) = self.borrow_mut().vars.get_mut(name) {
+        let mut ref_mut1 = self.borrow_mut();
+        if let Some(ret) = ref_mut1.vars.get_mut(name) {
             if stack_broken {
                 ret.is_local = false;
                 return ret.id.clone();
             }
             return ret.id.clone();
         } else {
-            if let Some(prev) = &mut self.borrow_mut().prev {
-                let ret = prev
-                    .get_or_global_internal(name, stack_broken || self.borrow_mut().stack_breaker);
-                if self.borrow_mut().stack_breaker {
-                    self.borrow_mut().known_heap_vars.insert(ret.clone());
+            let mut ref_mut = ref_mut1;
+            let is_stack_breaker = ref_mut.stack_breaker;
+            if let Some(prev) = &mut ref_mut.prev {
+                let ret = prev.get_or_global_internal(name, stack_broken || is_stack_breaker);
+                if ref_mut.stack_breaker {
+                    ref_mut.known_heap_vars.insert(ret.clone());
                 }
                 return ret;
             }
             let ret = Identity::new();
-            self.borrow_mut().vars.insert(
+            ref_mut.vars.insert(
                 name.clone(),
                 VarRef {
                     id: ret.clone(),
                     is_local: false,
                 },
             );
-            self.borrow_mut().known_heap_vars.insert(ret.clone());
+            ref_mut.known_heap_vars.insert(ret.clone());
             return ret;
         }
     }
@@ -293,7 +313,7 @@ macro_rules! js_for {
                     initializer: $init,
                     condition: $condition,
                     update: $update,
-                    body: (js_block! {$($body)*})
+                    body: (js_block! {$(($body))*})
                 })),
                 location: CodeLoc { line: 0, column: 0 },
             }
@@ -508,6 +528,40 @@ macro_rules! js_prop {
             })), location: CodeLoc {line:0, column: 0}}
         }
     }
+}
+
+#[macro_export]
+macro_rules! js_call {
+    (($callee:expr)(args: $args: expr)) => {
+        LocatedAction {
+            action: Action::Call(Box::new(CallFunction {
+                this: None,
+                member: $callee,
+                args: $args,
+            })),
+            location: CodeLoc { line: 0, column: 0 },
+        }
+    };
+    (($this:expr)[$callee:expr](args: $args: expr)) => {};
+}
+
+macro_rules! js_lit {
+    ([$($el:expr)*] -> $arr_var:ident) => {{
+        let mut counter = 0.0;
+        js_block! {
+            $(
+                {
+                    let v = Action::AssignProp(Box::new(AssignProp {
+                        to: js_var!($arr_var),
+                        key: Action::Literal(JsValue::Number(counter)),
+                        what: $el
+                    }));
+                    counter += 1;
+                    v
+                }
+            )*
+        }
+    }};
 }
 
 fn temp() {}

@@ -11,6 +11,7 @@ pub struct Op {
 }
 
 /// A memory target for a value read or write
+#[derive(Clone)]
 pub enum Target {
     /// Stack pointer. May be a Value (used as a variable) or a Heap Var
     Stack(usize),

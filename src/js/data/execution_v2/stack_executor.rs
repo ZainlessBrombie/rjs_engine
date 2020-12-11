@@ -38,6 +38,38 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
             .expect("Method failed to return");
         head.execution.op_pointer += 1;
 
+        if exception.is_some() {
+            if head.execution.catch_pointer != 0 {
+                head.execution.op_pointer = head.execution.catch_pointer;
+            } else {
+                // Truncate the stack
+                stack.values.truncate(stack.current_function);
+
+                // restore stack execution point
+                stack.current_function = head.prev_function;
+
+                // Stack is at its end
+                if stack.current_function == 0 {
+                    println!(
+                        "Uncaught exception!\n{}",
+                        &exception.unwrap().to_system_string()
+                    );
+                    return consumed;
+                }
+
+                // set head
+                head = stack
+                    .values
+                    .get_mut(stack.current_function + HEAD_LOCATION)
+                    .expect("Could not find our head. This is unlikely.")
+                    .assume_head();
+                // set instance
+                instance = head.execution.instance.clone();
+                // TODO
+            }
+            continue;
+        }
+
         match &op.code {
             OpCode::Jump { to } => {
                 head.execution.op_pointer = *to;
@@ -132,7 +164,10 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                     // An Option of an exception and walk up a step to the next best try catch
                     // while it is set
                     _ => {
-                        exception = Some(u_string("cannot call value"));
+                        exception = Some(u_string(
+                            &("cannot call value: ".to_string()
+                                + what_value.to_system_string().as_str()),
+                        ));
                         continue;
                     }
                 };
@@ -146,7 +181,6 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                     },
                 };
                 instance = new_instance;
-                stack.current_function = stack.values.len();
 
                 // put our head into storage
                 stack
@@ -156,34 +190,47 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                     .place_head(head);
                 head = new_head;
 
+                // Point to the new head
+                stack.current_function = stack.values.len();
+
                 // Finally, extend the stack
                 stack.values.push(StackElement::Borrowed); // We are using it right now
                 stack.values.push(StackElement::Value(this_value)); // this
                 stack.values.push(StackElement::Value(args_value)); // args
                 stack.values.push(StackElement::Value(JsValue::Undefined)); // return-to
-                stack.values.push(StackElement::Value(JsValue::Undefined)); // jump flag todo
+                stack.values.push(StackElement::Value(JsValue::Undefined)); // jump flag
 
                 assert_eq!(stack.current_function + BEGIN_VARS, stack.values.len());
 
                 stack
                     .values
                     .reserve(head.execution.instance.code.number_of_vars);
-                stack.values.extend(
-                    [0..head.execution.instance.code.number_of_vars]
-                        .iter()
-                        .map(|_| StackElement::Value(JsValue::Undefined)),
-                );
+
+                for cap_var in instance.heap_vars.iter() {
+                    stack.values.push(StackElement::HeapVar(cap_var.clone()));
+                }
+
+                for _ in 0..head.execution.instance.code.number_of_vars {
+                    // TODO subtract heap var count
+                    stack.values.push(StackElement::Value(JsValue::Undefined));
+                }
             }
             OpCode::Throw { what } => {
                 exception = Some(target_read(what, stack, &instance));
             }
             OpCode::Return { what } => {
                 let ret_val = target_read(what, stack, &instance);
-
                 // Truncate the stack
                 stack.values.truncate(stack.current_function);
+
                 // restore stack execution point
                 stack.current_function = head.prev_function;
+
+                // Stack is at its end
+                if stack.current_function == 0 {
+                    return consumed;
+                }
+
                 // return return value
                 *stack
                     .values
@@ -194,7 +241,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                 head = stack
                     .values
                     .get_mut(stack.current_function + HEAD_LOCATION)
-                    .expect("Could not find out head. This is unlikely.")
+                    .expect("Could not find our head. This is unlikely.")
                     .assume_head();
                 // set instance
                 instance = head.execution.instance.clone();
@@ -449,15 +496,21 @@ fn proto_inclusive_read(
                     if let Some(found_value) = obj_borrow.content.get(&key.to_system_string()) {
                         return Ok(found_value.value.clone());
                     } else {
-                        std::mem::drop(obj_borrow);
-                        std::mem::drop(gc_ref);
-                        source = proto_inclusive_read(
-                            source,
-                            u_string("__proto__"),
-                            global_object.clone(),
-                        )
-                        .unwrap_or(JsValue::Undefined);
-                        is_proto = true;
+                        if key.to_system_string().as_str() != "__proto__" {
+                            std::mem::drop(obj_borrow);
+                            std::mem::drop(gc_ref);
+                            source = proto_inclusive_read(
+                                source,
+                                u_string("__proto__"),
+                                global_object.clone(),
+                            )
+                            .unwrap_or(JsValue::Undefined);
+                            is_proto = true;
+                        } else {
+                            std::mem::drop(obj_borrow);
+                            std::mem::drop(gc_ref);
+                            source = JsValue::Undefined;
+                        }
                     }
                 }
             }
@@ -519,7 +572,7 @@ fn target_read(
         Target::Stack(stack_pointer) => {
             match stack
                 .values
-                .get(*stack_pointer)
+                .get(*stack_pointer + stack.current_function)
                 .expect("Unexpected stack size")
             {
                 StackElement::Value(value) => {
@@ -528,7 +581,7 @@ fn target_read(
                 StackElement::HeapVar(v) => {
                     return v.get();
                 }
-                _ => panic!("Expected value at stack location"),
+                _ => panic!("Expected value or heap var at stack location"),
             }
         }
         Target::Global(global_name) => {
@@ -596,7 +649,7 @@ fn target_write(
         Target::Stack(stack_pointer) => {
             match stack
                 .values
-                .get_mut(*stack_pointer)
+                .get_mut(*stack_pointer + stack.current_function)
                 .expect("Unexpected stack size")
             {
                 StackElement::HeapVar(heap) => {

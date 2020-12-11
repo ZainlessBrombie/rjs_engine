@@ -3,19 +3,20 @@ use crate::js::data::execution_v2::opcode::Arithmetic2Op;
 use crate::js::data::execution_v2::opcode::OpCode::ReadProp;
 use crate::js::data::intermediate::Action::VariableAssign;
 use crate::js::data::intermediate::{
-    empty_var_access, Action, Arithmetic2Action, CodeLoc, For, IfElse, InstantiateFunction,
-    LeftRight, LocatedAction, Module, NewObject, ScopedBlock, VarAccess, VarAccessTrait, VarAssign,
-    VarDecl, While,
+    empty_var_access, Action, Arithmetic2Action, AssignProp, CallFunction, CodeLoc, For, IfElse,
+    InstantiateFunction, LeftRight, LocatedAction, Module, NewObject, ScopedBlock, VarAccess,
+    VarAccessTrait, VarAssign, VarDecl, While,
 };
 use crate::js::data::js_types::{Identity, JsValue};
-use crate::js::data::util::{s_pool, u_bool, u_true};
+use crate::js::data::util::{s_pool, u_bool, u_string, u_true};
 use crate::*;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::process::exit;
 use std::rc::Rc;
 use swc_ecma_ast::{
-    BinaryOp, Decl, EmptyStmt, Expr, Function, ModuleItem, Pat, Stmt, VarDeclOrExpr,
+    BinaryOp, Decl, EmptyStmt, Expr, ExprOrSuper, Function, Lit, ModuleItem, Pat, Stmt,
+    VarDeclOrExpr,
 };
 
 thread_local! {
@@ -157,7 +158,7 @@ fn parse_stmt(stmt: Stmt, access: RcVarAccess) -> LocatedAction {
     unimplemented!()
 }
 
-fn parse_expr(expr: Expr, access: RcVarAccess) -> LocatedAction {
+fn parse_expr(expr: Expr, mut access: RcVarAccess) -> LocatedAction {
     match expr {
         Expr::This(_) => {
             return LocatedAction {
@@ -240,13 +241,141 @@ fn parse_expr(expr: Expr, access: RcVarAccess) -> LocatedAction {
             BinaryOp::NullishCoalescing => {}
         },
         Expr::Assign(_) => {}
-        Expr::Member(_) => {}
+        Expr::Member(member) => {
+            let obj = match member.obj {
+                ExprOrSuper::Super(_) => {
+                    unimplemented!()
+                }
+                ExprOrSuper::Expr(expr) => expr,
+            };
+            return js_prop!((parse_expr(*obj, access.clone()))[parse_expr(*member.prop, access)]);
+        }
         Expr::Cond(_) => {}
-        Expr::Call(_) => {}
+        Expr::Call(mut call) => {
+            let callee = match call.callee {
+                ExprOrSuper::Super(_) => {
+                    unimplemented!()
+                }
+                ExprOrSuper::Expr(expr) => parse_expr(*expr, access.clone()),
+            };
+
+            let args_var = Identity::new();
+
+            let mut args_assigns = Vec::new();
+
+            args_assigns.push(LocatedAction {
+                action: Action::AssignProp(Box::new(AssignProp {
+                    to: LocatedAction {
+                        action: Action::ReadVar(args_var.clone()),
+                        location: CodeLoc { line: 0, column: 0 },
+                    },
+                    key: LocatedAction {
+                        action: Action::Literal(u_string("length")),
+                        location: CodeLoc { line: 0, column: 0 },
+                    },
+                    what: LocatedAction {
+                        action: Action::Literal(JsValue::Number(call.args.len() as f64)),
+                        location: CodeLoc { line: 0, column: 0 },
+                    },
+                })),
+                location: CodeLoc { line: 0, column: 0 },
+            });
+
+            for (i, expr) in call.args.drain(..).enumerate() {
+                args_assigns.push(LocatedAction {
+                    action: Action::AssignProp(Box::new(AssignProp {
+                        to: LocatedAction {
+                            action: Action::ReadVar(args_var.clone()),
+                            location: CodeLoc { line: 0, column: 0 },
+                        },
+                        key: LocatedAction {
+                            action: Action::Literal(JsValue::Number(i as f64)),
+                            location: CodeLoc { line: 0, column: 0 },
+                        },
+                        what: parse_expr(*expr.expr, access.clone()),
+                    })),
+                    location: CodeLoc { line: 0, column: 0 },
+                });
+            }
+
+            return js_block! {
+                {LocatedAction {
+                    action: Action::VariableAssign(Box::new(VarAssign {
+                        var: args_var.clone(),
+                        right_side: Box::new(
+                            LocatedAction {
+                                action: Action::NewObject(Box::new(NewObject {
+                                    is_array: true
+                                })),
+                                location: CodeLoc { line: 0, column: 0 }
+                            }
+                        )
+                    })),
+                    location: CodeLoc {
+                        line: 0,
+                        column: 0
+                    }
+                }}
+                {LocatedAction {
+                    action: Action::Block(Box::new(ScopedBlock {
+                        location: CodeLoc {
+                            line: 0,
+                            column: 0
+                        },
+                        content: args_assigns
+                    })),
+                    location: CodeLoc {
+                        line: 0,
+                        column: 0
+                    }
+                }}
+
+                {js_call!((callee)(args: LocatedAction {
+                    action: Action::ReadVar(args_var),
+                    location: CodeLoc {
+                        line: 0,
+                        column: 0
+                    }
+                }))}
+            };
+        }
         Expr::New(_) => {}
         Expr::Seq(_) => {}
-        Expr::Ident(_) => {}
-        Expr::Lit(_) => {}
+        Expr::Ident(ident) => {
+            return LocatedAction {
+                action: Action::ReadVar(access.get_or_global(&Rc::new(ident.sym.to_string()))),
+                location: CodeLoc { line: 0, column: 0 },
+            }
+        }
+        Expr::Lit(literal) => match literal {
+            Lit::Str(s) => {
+                return LocatedAction {
+                    action: Action::Literal(JsValue::String(Rc::new(s.value.to_string()))),
+                    location: CodeLoc { line: 0, column: 0 },
+                }
+            }
+            Lit::Bool(b) => {
+                return LocatedAction {
+                    action: Action::Literal(JsValue::Boolean(b.value)),
+                    location: CodeLoc { line: 0, column: 0 },
+                }
+            }
+            Lit::Null(_) => {
+                return LocatedAction {
+                    action: Action::Literal(JsValue::Null),
+                    location: CodeLoc { line: 0, column: 0 },
+                }
+            }
+            Lit::Num(n) => {
+                return LocatedAction {
+                    action: Action::Literal(JsValue::Number(n.value)),
+                    location: CodeLoc { line: 0, column: 0 },
+                }
+            }
+            Lit::BigInt(_) => {}
+            Lit::Regex(_) => {}
+            Lit::JSXText(_) => {}
+        },
         Expr::Tpl(_) => {}
         Expr::TaggedTpl(_) => {}
         Expr::Arrow(_) => {}
@@ -272,10 +401,11 @@ fn parse_expr(expr: Expr, access: RcVarAccess) -> LocatedAction {
     unimplemented!()
 }
 
-fn this() -> Identity {
+pub fn this() -> Identity {
     return THIS_ID.with(|a| a.clone());
 }
-fn args() -> Identity {
+
+pub fn args() -> Identity {
     return ARGS_ID.with(|a| a.clone());
 }
 

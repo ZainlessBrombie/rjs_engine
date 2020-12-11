@@ -39,7 +39,7 @@ impl StackElement {
         match self {
             StackElement::Value(v) => v.clone(),
             _ => {
-                panic!("Assumed value to be at stack location 0. There was not.")
+                panic!("Assumed value to be at this stack location. There was not.")
             }
         }
     }
