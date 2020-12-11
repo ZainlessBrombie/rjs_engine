@@ -78,8 +78,8 @@ pub struct NewObject {
 }
 
 pub struct Arithmetic2Action {
-    left_right: LeftRight,
-    variant: Arithmetic2Op,
+    pub(crate) left_right: LeftRight,
+    pub(crate) variant: Arithmetic2Op,
 }
 
 pub struct LeftRight {
@@ -106,19 +106,19 @@ pub struct While {
 }
 
 pub struct ReadProp {
-    from: LocatedAction,
-    key: LocatedAction,
+    pub(crate) from: LocatedAction,
+    pub(crate) key: LocatedAction,
 }
 
 pub struct CallFunction {
-    this: Option<Action>,
-    member: Action, // Used as key if this is Some
-    args: Action,
+    pub(crate) this: Option<Action>,
+    pub(crate) member: Action, // Used as key if this is Some
+    pub(crate) args: Action,
 }
 
 pub struct VarDecl {
-    var_type: VarType,
-    assign: VarAssign,
+    pub(crate) var_type: VarType,
+    pub(crate) assign: VarAssign,
 }
 
 pub struct VarAssign {
@@ -137,73 +137,74 @@ struct VarRef {
     is_local: bool,
 }
 
-impl<'a> VarAccess<'a> {
-    pub fn empty() -> VarAccess<'a> {
-        let self_time = SelfTime::new();
-        return VarAccess {
-            known_heap_vars: Default::default(),
-            prev: None,
-            vars: Default::default(),
-            stack_breaker: false,
-            keep_alive: self_time,
-        };
+pub fn empty_var_access(
+    prev: Option<Rc<RefCell<VarAccess>>>,
+    stack_breaker: bool,
+) -> Rc<RefCell<VarAccess>> {
+    Rc::new(RefCell::new(VarAccess {
+        known_heap_vars: Default::default(),
+        prev,
+        vars: Default::default(),
+        stack_breaker,
+    }))
+}
+
+pub trait VarAccessTrait {
+    fn known_heap_vars(&self) -> Vec<Identity>;
+
+    fn get_or_global(&mut self, name: &Rc<String>) -> Identity;
+
+    fn get_or_global_internal(&mut self, name: &Rc<String>, stack_broken: bool) -> Identity;
+
+    fn local_declare(&mut self, name: Rc<String>) -> Identity;
+}
+
+impl VarAccessTrait for Rc<RefCell<VarAccess>> {
+    fn known_heap_vars(&self) -> Vec<Identity> {
+        self.borrow_mut()
+            .known_heap_vars
+            .iter()
+            .map(|i| i.clone())
+            .collect()
     }
 
-    pub fn child<'b>(&'a self, stack_breaker: bool) -> &'a mut VarAccess<'b>
-    where
-        'b: 'a,
-    {
-        let time = Default::default();
-        VarAccess {
-            known_heap_vars: Default::default(),
-            prev: None,
-            vars: Default::default(),
-            stack_breaker,
-            keep_alive: time,
-        };
-        unimplemented!()
-    }
-
-    pub fn known_heap_vars(&self) -> Vec<Identity> {
-        self.known_heap_vars.iter().map(|i| i.clone()).collect()
-    }
-
-    pub fn get_or_global(&mut self, name: &Rc<String>) -> Identity {
+    fn get_or_global(&mut self, name: &Rc<String>) -> Identity {
         self.get_or_global_internal(name, false)
     }
 
     /// stack_broken means we have crossed a heap boundary and need to capture.
-    pub fn get_or_global_internal(&mut self, name: &Rc<String>, stack_broken: bool) -> Identity {
-        if let Some(ret) = self.vars.get_mut(name) {
+    fn get_or_global_internal(&mut self, name: &Rc<String>, stack_broken: bool) -> Identity {
+        if let Some(ret) = self.borrow_mut().vars.get_mut(name) {
             if stack_broken {
                 ret.is_local = false;
                 return ret.id.clone();
             }
             return ret.id.clone();
         } else {
-            if let Some(prev) = &mut self.prev {
-                let ret = prev.get_or_global_internal(name, stack_broken || self.stack_breaker);
-                if self.stack_breaker {
-                    self.known_heap_vars.insert(ret.clone());
+            if let Some(prev) = &mut self.borrow_mut().prev {
+                let ret = prev
+                    .get_or_global_internal(name, stack_broken || self.borrow_mut().stack_breaker);
+                if self.borrow_mut().stack_breaker {
+                    self.borrow_mut().known_heap_vars.insert(ret.clone());
                 }
                 return ret;
             }
             let ret = Identity::new();
-            self.vars.insert(
+            self.borrow_mut().vars.insert(
                 name.clone(),
                 VarRef {
                     id: ret.clone(),
                     is_local: false,
                 },
             );
-            self.known_heap_vars.insert(ret.clone());
+            self.borrow_mut().known_heap_vars.insert(ret.clone());
             return ret;
         }
     }
 
-    pub fn local_declare(&mut self, name: Rc<String>) -> Identity {
+    fn local_declare(&mut self, name: Rc<String>) -> Identity {
         let ret = Identity::new();
-        self.vars.insert(
+        self.borrow_mut().vars.insert(
             name,
             VarRef {
                 id: ret.clone(),
@@ -214,47 +215,26 @@ impl<'a> VarAccess<'a> {
     }
 }
 
-pub struct VarAccess<'a> {
+pub struct VarAccess {
     known_heap_vars: HashSet<Identity>,
-    prev: Option<RefMut<'a, VarAccess<'a>>>,
+    prev: Option<Rc<RefCell<VarAccess>>>,
     vars: HashMap<Rc<String>, VarRef>,
     stack_breaker: bool,
-    keep_alive: SelfTime<'a>, // Just keep em all
-}
-
-#[macro_export]
-macro_rules! lifetimed {
-    ($f:expr) => {{
-        fn lifetimed<'a, 'b>(
-            f: impl FnOnce(&'a mut VarAccess<'b>) -> LocatedAction,
-        ) -> impl FnOnce(&'a mut VarAccess<'b>) -> LocatedAction
-        where
-            'b: 'a,
-        {
-            return f;
-        }
-        lifetimed($f)
-    }};
 }
 
 #[macro_export]
 macro_rules! js_block {
     {$($st:expr)*} => {
         {
-            lifetimed!((|a| {
-                let mut access = a.child(false);
-
-                let ret = LocatedAction {
-                    action: Action::Block(Box::from(ScopedBlock {
-                        content: vec![
-                            $($st(access),)*
-                        ],
-                        location: CodeLoc { line: 0, column: 0 }
-                    })),
+            LocatedAction {
+                action: Action::Block(Box::from(ScopedBlock {
+                    content: vec![
+                        $($st,)*
+                    ],
                     location: CodeLoc { line: 0, column: 0 }
-                };
-                ret
-            }))
+                })),
+                location: CodeLoc { line: 0, column: 0 }
+            }
         }
     };
 }
@@ -262,23 +242,15 @@ macro_rules! js_block {
 #[macro_export]
 macro_rules! js_if_else {
     (($cond:expr) {$($ist:expr)*} else {$($est:expr)*}) => {
-        {
-            lifetimed!((|a| {
-                let condition = $cond(a.child(false));
-                let if_block = js_block! {
-                                    $($ist)*
-                               }(a.child(false));
-                let else_block = js_block! {
-                                    $($est)*
-                                 }(a.child(false));
-                LocatedAction {
-                    location: CodeLoc { line: 0, column: 0 },
-                    action: Action::IfElse(Box::new(IfElse {
-                        condition,
-
-                        if_block,
-                        else_block
-                    }))
+        LocatedAction {
+            location: CodeLoc { line: 0, column: 0 },
+            action: Action::IfElse(Box::new(IfElse {
+                condition: $cond,
+                if_block: js_block! {
+                        $($ist)*
+                },
+                else_block: js_block! {
+                        $($est)*
                 }
             }))
         }
@@ -289,31 +261,24 @@ macro_rules! js_if_else {
 macro_rules! js_if {
     (($cond:expr) {$($ist:expr)*}) => {
         {
-            lifetimed!(|a: &mut VarAccess| {
-                js_if_else!(($cond) {$($ist:expr)*} else {})(a)
-            })
+            {
+                js_if_else!(($cond) {$($ist:expr)*} else {})
+            }
         }
     }
-}
-
-#[macro_export]
-macro_rules! js_action_lit {
-    ($a:ident, $ex:expr) => {{
-        lifetimed!((|$a| $ex))
-    }};
 }
 
 #[macro_export]
 macro_rules! js_while {
     (($cond:expr) {$($body:expr)*}) => {
         {
-            lifetimed!((|a: &mut VarAccess| LocatedAction {
+            LocatedAction {
                 action: Action::While(Box::from(While {
-                    condition: $cond(a),
-                    body: js_block! {$($body)*}(a)
+                    condition: $cond,
+                    body: js_block! {$($body)*}
                 })),
                 location: CodeLoc { line: 0, column: 0 },
-            }))
+            }
         }
     };
 }
@@ -322,18 +287,16 @@ macro_rules! js_while {
 macro_rules! js_for {
     (($init:expr; $condition:expr; $update:expr) {$($body:expr)*}) => {
         {
-            lifetimed!((|a| {
-                let a = a.child(false);
-                LocatedAction {
-                    action: Action::For(Box::from(For {
-                        initializer: $init(&mut a),
-                        condition: $condition(&mut a),
-                        update: $update(&mut a),
-                        body: (js_block! {$($body)*})(&mut a)
-                    })),
-                    location: CodeLoc { line: 0, column: 0 },
-                }
-            }))
+
+            LocatedAction {
+                action: Action::For(Box::from(For {
+                    initializer: $init,
+                    condition: $condition,
+                    update: $update,
+                    body: (js_block! {$($body)*})
+                })),
+                location: CodeLoc { line: 0, column: 0 },
+            }
         }
     };
 }
@@ -341,106 +304,106 @@ macro_rules! js_for {
 #[macro_export]
 macro_rules! js_bin {
     (($left:expr) == ($right:expr)) => {{
-        lifetimed!(|a: &mut VarAccess| LocatedAction {
+        LocatedAction {
             action: Action::FuzzyCompare(Box::new(LeftRight {
-                left: $left(a),
-                right: $right(a),
+                left: $left,
+                right: $right,
             })),
             location: CodeLoc { line: 0, column: 0 },
-        })
+        }
     }};
     (($left:expr) === ($right:expr)) => {{
-        lifetimed!(|a| LocatedAction {
+        LocatedAction {
             action: Action::StrictCompare(Box::new(LeftRight {
-                left: $left(a),
-                right: $right(a),
+                left: $left,
+                right: $right,
             })),
             location: CodeLoc { line: 0, column: 0 },
-        })
+        }
     }};
     (($left:expr) != ($right:expr)) => {{
-        lifetimed!(|a| LocatedAction {
+        LocatedAction {
             action: Action::BoolNot(Box::new(LocatedAction {
                 action: Action::FuzzyCompare(Box::new(LeftRight {
-                    left: $left(a),
-                    right: $right(a),
+                    left: $left,
+                    right: $right,
                 })),
                 location: CodeLoc { line: 0, column: 0 },
             })),
             location: CodeLoc { line: 0, column: 0 },
-        })
+        }
     }};
     (($left:expr) !== ($right:expr)) => {{
-        lifetimed!(|a| LocatedAction {
+        LocatedAction {
             action: Action::BoolNot(Box::new(LocatedAction {
                 action: Action::StrictCompare(Box::new(LeftRight {
-                    left: $left(a),
-                    right: $right(a),
+                    left: $left,
+                    right: $right,
                 })),
                 location: CodeLoc { line: 0, column: 0 },
             })),
             location: CodeLoc { line: 0, column: 0 },
-        })
+        }
     }};
     (($left:expr) + ($right:expr)) => {{
-        lifetimed!(|a| LocatedAction {
+        LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
-                    left: $left(a),
-                    right: $right(a),
+                    left: $left,
+                    right: $right,
                 },
                 variant: Arithmetic2Op::Add,
             })),
             location: CodeLoc { line: 0, column: 0 },
-        })
+        }
     }};
     (($left:expr) - ($right:expr)) => {{
-        lifetimed!(|a| LocatedAction {
+        LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
-                    left: $left(a),
-                    right: $right(a),
+                    left: $left,
+                    right: $right,
                 },
                 variant: Arithmetic2Op::Sub,
             })),
             location: CodeLoc { line: 0, column: 0 },
-        })
+        }
     }};
     (($left:expr) * ($right:expr)) => {{
-        lifetimed!(|a| LocatedAction {
+        LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
-                    left: $left(a),
-                    right: $right(a),
+                    left: $left,
+                    right: $right,
                 },
                 variant: Arithmetic2Op::Multi,
             })),
             location: CodeLoc { line: 0, column: 0 },
-        })
+        }
     }};
     (($left:expr) / ($right:expr)) => {{
-        lifetimed!(|a| LocatedAction {
+        LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
-                    left: $left(a),
-                    right: $right(a),
+                    left: $left,
+                    right: $right,
                 },
                 variant: Arithmetic2Op::Div,
             })),
             location: CodeLoc { line: 0, column: 0 },
-        })
+        }
     }};
     (($left:expr) ** ($right:expr)) => {{
-        lifetimed!(|a| LocatedAction {
+        LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
-                    left: $left(a),
-                    right: $right(a),
+                    left: $left,
+                    right: $right,
                 },
                 variant: Arithmetic2Op::Pow,
             })),
             location: CodeLoc { line: 0, column: 0 },
-        })
+        }
     }};
 }
 
@@ -503,46 +466,46 @@ macro_rules! js_primitive {
 #[macro_export]
 macro_rules! js_static {
     ($val:expr) => {{
-        lifetimed!(|a| LocatedAction {
+        LocatedAction {
             action: Action::Literal($val),
             location: CodeLoc { line: 0, column: 0 },
-        })
+        }
     }};
 }
 
 #[macro_export]
 macro_rules! js_var {
     (($name:expr) = $to:expr) => {{
-        lifetimed!(|a| LocatedAction {
+        LocatedAction {
             action: Action::VariableAssign(Box::new(VarAssign {
                 var: $name,
-                right_side: Box::new($to(a)),
+                right_side: Box::new($to),
             })),
             location: CodeLoc { line: 0, column: 0 },
-        })
+        }
     }};
     ($name:expr) => {{
-        lifetimed!(|a| LocatedAction {
+        LocatedAction {
             action: Action::ReadVar($name),
             location: CodeLoc { line: 0, column: 0 },
-        })
+        }
     }};
 }
 
 #[macro_export]
 macro_rules! js_prop {
     (($of:expr) $([$index:expr])+[$other:expr]) => {
-        lifetimed!(|a| Action::ReadProp(Box::new(ReadProp {
-            from: (js_index(($of) $([$index])+))(a),
-            key: $other(a)
-        })))
+        Action::ReadProp(Box::new(ReadProp {
+            from: (js_index(($of) $([$index])+)),
+            key: $other
+        }))
     };
     (($of:expr)[$index:expr]) => {
         {
-            lifetimed!(|a| LocatedAction{ action: Action::ReadProp(Box::new(crate::js::data::intermediate::ReadProp {
-                from: $of(a),
-                key: $index(a)
-            })), location: CodeLoc {line:0, column: 0}})
+            LocatedAction{ action: Action::ReadProp(Box::new(crate::js::data::intermediate::ReadProp {
+                from: $of,
+                key: $index
+            })), location: CodeLoc {line:0, column: 0}}
         }
     }
 }

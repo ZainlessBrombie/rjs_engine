@@ -3,7 +3,7 @@ use self::swc_ecma_parser::JscTarget;
 use crate::js::data::execution_v2::function::FunctionInstance;
 use crate::js::data::execution_v2::stack_executor::run_stack;
 use crate::js::data::intermediate::converter::build_function;
-use crate::js::data::intermediate::VarAccess;
+use crate::js::data::intermediate::{empty_var_access, VarAccess, VarAccessTrait};
 use crate::js::data::js_execution::JsVar::Stack;
 use crate::js::data::js_execution::{EngineState, NativeFunction};
 use crate::js::data::js_types::{JSCallable, JsFn, JsValue};
@@ -111,8 +111,8 @@ pub fn m1() {
         })
         .unwrap();
 
-    let mut access = VarAccess::empty();
-    let module = parse_module(module, &mut access);
+    let mut access = empty_var_access(None, false);
+    let module = parse_module(module, access);
     let mut stack = js::data::execution_v2::Stack::create_stack(build_function(module));
 
     let consumed = run_stack(&mut stack, 10000);

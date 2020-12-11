@@ -3,12 +3,14 @@ use crate::js::data::execution_v2::opcode::Arithmetic2Op;
 use crate::js::data::execution_v2::opcode::OpCode::ReadProp;
 use crate::js::data::intermediate::Action::VariableAssign;
 use crate::js::data::intermediate::{
-    Action, Arithmetic2Action, CodeLoc, For, IfElse, InstantiateFunction, LeftRight, LocatedAction,
-    Module, NewObject, ScopedBlock, VarAccess, VarAssign, VarDecl, While,
+    empty_var_access, Action, Arithmetic2Action, CodeLoc, For, IfElse, InstantiateFunction,
+    LeftRight, LocatedAction, Module, NewObject, ScopedBlock, VarAccess, VarAccessTrait, VarAssign,
+    VarDecl, While,
 };
 use crate::js::data::js_types::{Identity, JsValue};
 use crate::js::data::util::{s_pool, u_bool, u_true};
 use crate::*;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::process::exit;
 use std::rc::Rc;
@@ -20,8 +22,9 @@ thread_local! {
     static THIS_ID: Identity = Identity::new();
     static ARGS_ID: Identity = Identity::new();
 }
+type RcVarAccess = Rc<RefCell<VarAccess>>;
 
-pub fn parse_module(module: swc_ecma_ast::Module, vars: &'a mut VarAccess<'a>) -> Action {
+pub fn parse_module(module: swc_ecma_ast::Module, vars: RcVarAccess) -> Action {
     let mut ret = Vec::new();
     for item in module.body {
         match item {
@@ -29,7 +32,7 @@ pub fn parse_module(module: swc_ecma_ast::Module, vars: &'a mut VarAccess<'a>) -
                 println!("Module Decl not supported");
             }
             ModuleItem::Stmt(stmt) => {
-                ret.push(parse_stmt(stmt, vars));
+                ret.push(parse_stmt(stmt, vars.clone()));
             }
         }
     }
@@ -39,12 +42,13 @@ pub fn parse_module(module: swc_ecma_ast::Module, vars: &'a mut VarAccess<'a>) -
     }));
 }
 
-fn parse_stmt(stmt: Stmt, access: &'a mut VarAccess<'a>) -> LocatedAction {
+fn parse_stmt(stmt: Stmt, access: RcVarAccess) -> LocatedAction {
     match stmt {
         Stmt::Block(block) => {
             let mut action = Vec::new();
             for stmt in block.stmts {
-                action.push(parse_stmt(stmt, &mut access.child(false)));
+                let action1 = parse_stmt(stmt, access.clone());
+                action.push(action1);
             }
             return LocatedAction {
                 action: Action::Block(Box::new(ScopedBlock {
@@ -79,11 +83,11 @@ fn parse_stmt(stmt: Stmt, access: &'a mut VarAccess<'a>) -> LocatedAction {
             let alt = *if_block.alt.unwrap_or(Box::new(Stmt::Empty(EmptyStmt {
                 span: Default::default(),
             })));
-            return js_if_else!((js_action_lit!(a, parse_expr(test, a))) {
-                js_action_lit!(a, parse_stmt(cons, a))
+            return js_if_else!((parse_expr(test, access.clone())) {
+                parse_stmt(cons, access.clone())
             } else {
-                js_action_lit!(a, parse_stmt(alt, a))
-            })(access);
+                parse_stmt(alt, access)
+            });
         }
         Stmt::Switch(_) => {}
         Stmt::Throw(thr) => {
@@ -94,48 +98,49 @@ fn parse_stmt(stmt: Stmt, access: &'a mut VarAccess<'a>) -> LocatedAction {
         }
         Stmt::Try(_) => {}
         Stmt::While(while_loop) => {
-            js_while!((js_action_lit!(a, parse_expr(*while_loop.test, a))) {
-                js_action_lit!(a, parse_stmt(*while_loop.body, a))
+            let mut access: RcVarAccess = empty_var_access(Some(access), false);
+            js_while!((parse_expr(*while_loop.test, access.clone())) {
+                parse_stmt(*while_loop.body, access.clone())
             });
         }
         Stmt::DoWhile(_) => {}
         Stmt::For(for_loop) => {
-            return js_for!((js_action_lit!(a, {
-                if for_loop.init.is_some() {
-                    match for_loop.init.unwrap() {
-                        VarDeclOrExpr::VarDecl(decl) => {
-                            parse_var_decl(decl, a)
-                        }
-                        VarDeclOrExpr::Expr(expr) => {
-                            parse_expr(*expr, a)
-                        }
+            let mut access = empty_var_access(Some(access), false);
+            return js_for!((
+            if for_loop.init.is_some() {
+                match for_loop.init.unwrap() {
+                    VarDeclOrExpr::VarDecl(decl) => {
+                        parse_var_decl(decl, access.clone())
                     }
-                } else {
-                    (js_block! {})(a)
+                    VarDeclOrExpr::Expr(expr) => {
+                        parse_expr(*expr, access.clone())
+                    }
                 }
-            }); js_action_lit!(a, {
+            } else {
+                js_block! {}
+            }; {
                 if for_loop.test.is_some() {
-                    parse_expr(*for_loop.test.unwrap(), a)
+                    parse_expr(*for_loop.test.unwrap(), access.clone())
                 } else {
-                    (js_block! {})(a)
+                    js_block! {}
                 }
-            }); js_action_lit!(a, {
+            }; {
                 if let Some(update) = for_loop.update {
-                    parse_expr(*update, a)
+                    parse_expr(*update, access.clone())
                 } else {
-                    js_block!()(a)
+                    js_block!()
                 }
-            })) {
-                js_action_lit!(a, parse_stmt(*for_loop.body, a))
-            })(access);
+            }) {
+                parse_stmt(*for_loop.body, access.clone())
+            });
         }
         Stmt::ForIn(_) => {}
         Stmt::ForOf(_) => {}
         Stmt::Decl(decl) => match decl {
             Decl::Class(_) => {}
             Decl::Fn(f) => {
-                let mut access = access.child(true);
-                return parse_function(f.function, &mut access);
+                let mut access = empty_var_access(Some(access), true);
+                return parse_function(f.function, access);
             }
             Decl::Var(var_decl) => {
                 return parse_var_decl(var_decl, access);
@@ -152,7 +157,7 @@ fn parse_stmt(stmt: Stmt, access: &'a mut VarAccess<'a>) -> LocatedAction {
     unimplemented!()
 }
 
-fn parse_expr(expr: Expr, access: &'a mut VarAccess<'a>) -> LocatedAction {
+fn parse_expr(expr: Expr, access: RcVarAccess) -> LocatedAction {
     match expr {
         Expr::This(_) => {
             return LocatedAction {
@@ -170,27 +175,27 @@ fn parse_expr(expr: Expr, access: &'a mut VarAccess<'a>) -> LocatedAction {
         Expr::Bin(bin) => match bin.op {
             BinaryOp::EqEq => {
                 return js_bin!(
-                    (js_action_lit!(a, parse_expr(*bin.left, a)))
-                        == (js_action_lit!(a, parse_expr(*bin.left, a)))
-                )(access);
+                    (parse_expr(*bin.left, access.clone()))
+                        == (parse_expr(*bin.right, access.clone()))
+                );
             }
             BinaryOp::NotEq => {
                 return js_bin!(
-                    (js_action_lit!(a, parse_expr(*bin.left, a)))
-                        != (js_action_lit!(a, parse_expr(*bin.left, a)))
-                )(access);
+                    (parse_expr(*bin.left, access.clone()))
+                        != (parse_expr(*bin.right, access.clone()))
+                );
             }
             BinaryOp::EqEqEq => {
                 return js_bin!(
-                    (js_action_lit!(a, parse_expr(*bin.left, a)))
-                        === (js_action_lit!(a, parse_expr(*bin.left, a)))
-                )(access);
+                    (parse_expr(*bin.left, access.clone()))
+                        === (parse_expr(*bin.right, access))
+                );
             }
             BinaryOp::NotEqEq => {
                 return js_bin!(
-                    (js_action_lit!(a, parse_expr(*bin.left, a)))
-                        !== (js_action_lit!(a, parse_expr(*bin.left, a)))
-                )(access);
+                    (parse_expr(*bin.left, access.clone()))
+                        !== (parse_expr(*bin.right, access))
+                );
             }
             BinaryOp::Lt => {}
             BinaryOp::LtEq => {}
@@ -201,27 +206,23 @@ fn parse_expr(expr: Expr, access: &'a mut VarAccess<'a>) -> LocatedAction {
             BinaryOp::ZeroFillRShift => {}
             BinaryOp::Add => {
                 return js_bin!(
-                    (js_action_lit!(a, parse_expr(*bin.left, a)))
-                        + (js_action_lit!(a, parse_expr(*bin.left, a)))
-                )(access);
+                    (parse_expr(*bin.left, access.clone())) + (parse_expr(*bin.right, access))
+                );
             }
             BinaryOp::Sub => {
                 return js_bin!(
-                    (js_action_lit!(a, parse_expr(*bin.left, a)))
-                        - (js_action_lit!(a, parse_expr(*bin.left, a)))
-                )(access);
+                    (parse_expr(*bin.left, access.clone())) - (parse_expr(*bin.right, access))
+                );
             }
             BinaryOp::Mul => {
                 return js_bin!(
-                    (js_action_lit!(a, parse_expr(*bin.left, a)))
-                        * (js_action_lit!(a, parse_expr(*bin.left, a)))
-                )(access);
+                    (parse_expr(*bin.left, access.clone())) * (parse_expr(*bin.right, access))
+                );
             }
             BinaryOp::Div => {
                 return js_bin!(
-                    (js_action_lit!(a, parse_expr(*bin.left, a)))
-                        / (js_action_lit!(a, parse_expr(*bin.left, a)))
-                )(access);
+                    (parse_expr(*bin.left, access.clone())) / (parse_expr(*bin.right, access))
+                );
             }
             BinaryOp::Mod => {}
             BinaryOp::BitOr => {}
@@ -233,9 +234,8 @@ fn parse_expr(expr: Expr, access: &'a mut VarAccess<'a>) -> LocatedAction {
             BinaryOp::InstanceOf => {}
             BinaryOp::Exp => {
                 return js_bin!(
-                    (js_action_lit!(a, parse_expr(*bin.left, a)))
-                        * *(js_action_lit!(a, parse_expr(*bin.left, a)))
-                )(access);
+                    (parse_expr(*bin.left, access.clone())) * *(parse_expr(*bin.right, access))
+                );
             }
             BinaryOp::NullishCoalescing => {}
         },
@@ -279,16 +279,16 @@ fn args() -> Identity {
     return ARGS_ID.with(|a| a.clone());
 }
 
-fn parse_function(f: Function, access: &'a mut VarAccess<'a>) -> LocatedAction {
+fn parse_function(f: Function, access: RcVarAccess) -> LocatedAction {
     let mut actions = Vec::new();
 
     for (i, param) in f.params.iter().enumerate() {
         match &param.pat {
             Pat::Ident(ident) => {
-                let v = access.local_declare(Rc::new(ident.sym.to_string()));
+                let v = access.clone().local_declare(Rc::new(ident.sym.to_string()));
                 actions.push(js_var!(
                     (v) = js_prop!((js_var!(args()))[js_static!(js_primitive!(i))])
-                )(access));
+                ));
             }
             _ => unimplemented!(),
         }
@@ -296,7 +296,7 @@ fn parse_function(f: Function, access: &'a mut VarAccess<'a>) -> LocatedAction {
 
     if let Some(body) = f.body {
         for stmt in body.stmts {
-            actions.push(parse_stmt(stmt, access));
+            actions.push(parse_stmt(stmt, access.clone()));
         }
     }
 
@@ -316,7 +316,7 @@ fn parse_function(f: Function, access: &'a mut VarAccess<'a>) -> LocatedAction {
     };
 }
 
-fn parse_var_decl(mut decl: swc_ecma_ast::VarDecl, access: &'a mut VarAccess<'a>) -> LocatedAction {
+fn parse_var_decl(mut decl: swc_ecma_ast::VarDecl, mut access: RcVarAccess) -> LocatedAction {
     let one = decl.decls.drain(..).next().unwrap();
     let name = match &one.name {
         Pat::Ident(ident) => ident.sym.to_string(),
@@ -324,14 +324,12 @@ fn parse_var_decl(mut decl: swc_ecma_ast::VarDecl, access: &'a mut VarAccess<'a>
     };
     let var = access.local_declare(Rc::new(name));
     return js_var!(
-        (var) = js_action_lit!(
-            a,
-            one.init
-                .map(|init| parse_expr(*init, a))
-                .unwrap_or(LocatedAction {
-                    action: Action::Literal(JsValue::Undefined),
-                    location: CodeLoc { column: 0, line: 0 }
-                })
-        )
-    )(access);
+        (var) = one
+            .init
+            .map(|init| parse_expr(*init, access))
+            .unwrap_or(LocatedAction {
+                action: Action::Literal(JsValue::Undefined),
+                location: CodeLoc { column: 0, line: 0 }
+            })
+    );
 }
