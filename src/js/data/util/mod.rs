@@ -1,3 +1,5 @@
+pub mod col_line_map;
+
 use crate::js::data::engine_constants::ConstantStrings;
 use crate::js::data::js_execution::{native_from, EngineQueuer, FnOpRepr, JsVar, VarAlloc};
 use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsObj, JsProperty, JsValue};

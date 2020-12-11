@@ -244,16 +244,16 @@ pub struct VarAccess {
 
 #[macro_export]
 macro_rules! js_block {
-    {$($st:expr)*} => {
+    {($($st:expr)*) @ $loc:expr} => {
         {
             LocatedAction {
                 action: Action::Block(Box::from(ScopedBlock {
                     content: vec![
                         $($st,)*
                     ],
-                    location: CodeLoc { line: 0, column: 0 }
+                    location: $loc
                 })),
-                location: CodeLoc { line: 0, column: 0 }
+                location: $loc
             }
         }
     };
@@ -261,16 +261,18 @@ macro_rules! js_block {
 
 #[macro_export]
 macro_rules! js_if_else {
-    (($cond:expr) {$($ist:expr)*} else {$($est:expr)*}) => {
+    (($cond:expr) {$($ist:expr)*} else {$($est:expr)*} @ $loc:expr) => {
         LocatedAction {
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
             action: Action::IfElse(Box::new(IfElse {
                 condition: $cond,
                 if_block: js_block! {
-                        $($ist)*
+                        ($($ist)*)
+                        @ $loc
                 },
                 else_block: js_block! {
-                        $($est)*
+                        ($($est)*)
+                        @ $loc
                 }
             }))
         }
@@ -279,10 +281,10 @@ macro_rules! js_if_else {
 
 #[macro_export]
 macro_rules! js_if {
-    (($cond:expr) {$($ist:expr)*}) => {
+    (($cond:expr) {$($ist:expr)*} @ $loc:expr) => {
         {
             {
-                js_if_else!(($cond) {$($ist:expr)*} else {})
+                js_if_else!(($cond) {$($ist:expr)*} else {} @ $loc)
             }
         }
     }
@@ -290,14 +292,14 @@ macro_rules! js_if {
 
 #[macro_export]
 macro_rules! js_while {
-    (($cond:expr) {$($body:expr)*}) => {
+    (($cond:expr) {$($body:expr)*} @ $loc:expr) => {
         {
             LocatedAction {
                 action: Action::While(Box::from(While {
                     condition: $cond,
-                    body: js_block! {$($body)*}
+                    body: js_block! {($($body)*) @ $loc}
                 })),
-                location: CodeLoc { line: 0, column: 0 },
+                location: $loc,
             }
         }
     };
@@ -305,7 +307,7 @@ macro_rules! js_while {
 
 #[macro_export]
 macro_rules! js_for {
-    (($init:expr; $condition:expr; $update:expr) {$($body:expr)*}) => {
+    (($init:expr; $condition:expr; $update:expr) {$($body:expr)*}  @ $loc:expr) => {
         {
 
             LocatedAction {
@@ -313,9 +315,9 @@ macro_rules! js_for {
                     initializer: $init,
                     condition: $condition,
                     update: $update,
-                    body: (js_block! {$(($body))*})
+                    body: (js_block! {($(($body))*) @ $loc } )
                 })),
-                location: CodeLoc { line: 0, column: 0 },
+                location: $loc,
             }
         }
     };
@@ -323,49 +325,49 @@ macro_rules! js_for {
 
 #[macro_export]
 macro_rules! js_bin {
-    (($left:expr) == ($right:expr)) => {{
+    (($left:expr) == ($right:expr) @ $loc:expr) => {{
         LocatedAction {
             action: Action::FuzzyCompare(Box::new(LeftRight {
                 left: $left,
                 right: $right,
             })),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     }};
-    (($left:expr) === ($right:expr)) => {{
+    (($left:expr) === ($right:expr) @ $loc:expr) => {{
         LocatedAction {
             action: Action::StrictCompare(Box::new(LeftRight {
                 left: $left,
                 right: $right,
             })),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     }};
-    (($left:expr) != ($right:expr)) => {{
+    (($left:expr) != ($right:expr) @ $loc:expr) => {{
         LocatedAction {
             action: Action::BoolNot(Box::new(LocatedAction {
                 action: Action::FuzzyCompare(Box::new(LeftRight {
                     left: $left,
                     right: $right,
                 })),
-                location: CodeLoc { line: 0, column: 0 },
+                location: $loc,
             })),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     }};
-    (($left:expr) !== ($right:expr)) => {{
+    (($left:expr) !== ($right:expr) @ $loc:expr) => {{
         LocatedAction {
             action: Action::BoolNot(Box::new(LocatedAction {
                 action: Action::StrictCompare(Box::new(LeftRight {
                     left: $left,
                     right: $right,
                 })),
-                location: CodeLoc { line: 0, column: 0 },
+                location: $loc,
             })),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     }};
-    (($left:expr) + ($right:expr)) => {{
+    (($left:expr) + ($right:expr) @ $loc:expr) => {{
         LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
@@ -374,10 +376,10 @@ macro_rules! js_bin {
                 },
                 variant: Arithmetic2Op::Add,
             })),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     }};
-    (($left:expr) - ($right:expr)) => {{
+    (($left:expr) - ($right:expr) @ $loc:expr) => {{
         LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
@@ -386,10 +388,10 @@ macro_rules! js_bin {
                 },
                 variant: Arithmetic2Op::Sub,
             })),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     }};
-    (($left:expr) * ($right:expr)) => {{
+    (($left:expr) * ($right:expr) @ $loc:expr) => {{
         LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
@@ -398,10 +400,10 @@ macro_rules! js_bin {
                 },
                 variant: Arithmetic2Op::Multi,
             })),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     }};
-    (($left:expr) / ($right:expr)) => {{
+    (($left:expr) / ($right:expr) @ $loc:expr) => {{
         LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
@@ -410,10 +412,10 @@ macro_rules! js_bin {
                 },
                 variant: Arithmetic2Op::Div,
             })),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     }};
-    (($left:expr) ** ($right:expr)) => {{
+    (($left:expr) ** ($right:expr)  @ $loc:expr) => {{
         LocatedAction {
             action: Action::Arithmetic2(Box::new(Arithmetic2Action {
                 left_right: LeftRight {
@@ -422,7 +424,7 @@ macro_rules! js_bin {
                 },
                 variant: Arithmetic2Op::Pow,
             })),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     }};
 }
@@ -485,68 +487,68 @@ macro_rules! js_primitive {
 
 #[macro_export]
 macro_rules! js_static {
-    ($val:expr) => {{
+    (($val:expr) @ $loc:expr) => {{
         LocatedAction {
             action: Action::Literal($val),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     }};
 }
 
 #[macro_export]
 macro_rules! js_var {
-    (($name:expr) = $to:expr) => {{
+    (($name:expr) = ($to:expr) @ $loc:expr) => {{
         LocatedAction {
             action: Action::VariableAssign(Box::new(VarAssign {
                 var: $name,
                 right_side: Box::new($to),
             })),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     }};
-    ($name:expr) => {{
+    (($name:expr) @ $loc:expr) => {{
         LocatedAction {
             action: Action::ReadVar($name),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     }};
 }
 
 #[macro_export]
 macro_rules! js_prop {
-    (($of:expr) $([$index:expr])+[$other:expr]) => {
+    (($of:expr) $([$index:expr])+[$other:expr] @ $loc:expr) => {
         Action::ReadProp(Box::new(ReadProp {
-            from: (js_index(($of) $([$index])+)),
+            from: (js_prop!(($of) $([$index])+  @ $loc)),
             key: $other
         }))
     };
-    (($of:expr)[$index:expr]) => {
+    (($of:expr)[$index:expr] @ $loc:expr) => {
         {
             LocatedAction{ action: Action::ReadProp(Box::new(crate::js::data::intermediate::ReadProp {
                 from: $of,
                 key: $index
-            })), location: CodeLoc {line:0, column: 0}}
+            })), location: $loc}
         }
     }
 }
 
 #[macro_export]
 macro_rules! js_call {
-    (($callee:expr)(args: $args: expr)) => {
+    (($callee:expr)(args: $args: expr) @ $loc:expr) => {
         LocatedAction {
             action: Action::Call(Box::new(CallFunction {
                 this: None,
                 member: $callee,
                 args: $args,
             })),
-            location: CodeLoc { line: 0, column: 0 },
+            location: $loc,
         }
     };
     (($this:expr)[$callee:expr](args: $args: expr)) => {};
 }
 
 macro_rules! js_lit {
-    ([$($el:expr)*] -> $arr_var:ident) => {{
+    ([$($el:expr)*] -> $arr_var:ident @ $loc:expr) => {{
         let mut counter = 0.0;
         js_block! {
             $(
@@ -560,6 +562,7 @@ macro_rules! js_lit {
                     v
                 }
             )*
+             @ $loc
         }
     }};
 }
