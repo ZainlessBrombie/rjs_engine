@@ -118,22 +118,7 @@ fn build_opcode_parts(
             }];
         }
         Action::VariableDeclare(decl) => {
-            let into = vars.allocate();
-            let mut ret = build_opcode_parts(
-                *decl.assign.right_side,
-                Target::Stack(into),
-                vars,
-                offset,
-                source,
-            );
-            ret.push(Op {
-                target,
-                code: OpCode::Transfer {
-                    from: Target::Stack(into),
-                },
-                loc: action.location,
-            });
-            return ret;
+            return build_opcode_parts(*decl.assign.right_side, target, vars, offset, source);
         }
         Action::VariableAssign(assign) => {
             let into = vars.get(&assign.var);
@@ -144,13 +129,15 @@ fn build_opcode_parts(
                 offset,
                 source,
             );
-            ret.push(Op {
-                target,
-                code: OpCode::Transfer {
-                    from: Target::Stack(into),
-                },
-                loc: action.location,
-            });
+            if !target.is_hole() {
+                ret.push(Op {
+                    target,
+                    code: OpCode::Transfer {
+                        from: Target::Stack(into),
+                    },
+                    loc: action.location,
+                });
+            }
             return ret;
         }
         Action::Literal(lit) => {

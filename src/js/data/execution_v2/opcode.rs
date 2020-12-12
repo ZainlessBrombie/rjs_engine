@@ -24,6 +24,16 @@ pub enum Target {
     BlackHole,
 }
 
+impl Target {
+    #[inline]
+    pub fn is_hole(&self) -> bool {
+        match self {
+            Target::BlackHole => true,
+            _ => false,
+        }
+    }
+}
+
 /// An opcode.
 /// If they don't have a target, target is set to BlackHole
 #[derive(Debug)]
