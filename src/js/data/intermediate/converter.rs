@@ -4,7 +4,7 @@ use crate::js::data::execution_v2::function::{
 };
 use crate::js::data::execution_v2::opcode::{Op, OpCode, Target};
 use crate::js::data::execution_v2::var::JsVar;
-use crate::js::data::intermediate::Action;
+use crate::js::data::intermediate::{Action, CodeLoc, LocatedAction};
 use crate::js::data::js_execution::native_from;
 use crate::js::data::js_types::{Identity, JSCallable, JsValue};
 use crate::js::data::util::{s_pool, JsObjectBuilder};
@@ -12,7 +12,7 @@ use safe_gc::{Gc, GcCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-pub fn build_function(action: Action, console: Identity) -> JsValue {
+pub fn build_function(action: Action, console: Identity, source: Rc<String>) -> JsValue {
     let console_obj = JsObjectBuilder::new(None)
         .with_prop(
             s_pool("log"),
@@ -34,12 +34,22 @@ pub fn build_function(action: Action, console: Identity) -> JsValue {
     };
     let mut repo = StackVarRepo::new(Default::default());
     repo.by_id.insert(console, BEGIN_VARS);
-    let mut ops = build_opcode_parts(action, Target::BlackHole, &mut repo, 0);
+    let mut ops = build_opcode_parts(
+        LocatedAction {
+            action,
+            location: CodeLoc { line: 1, column: 1 },
+        },
+        Target::BlackHole,
+        &mut repo,
+        0,
+        source.clone(),
+    );
     ops.push(Op {
         target: Target::BlackHole,
         code: OpCode::Return {
             what: Target::BlackHole,
         },
+        loc: CodeLoc { line: 1, column: 1 },
     });
     return JsObjectBuilder::new(None)
         .with_callable(JSCallable::Js {
@@ -49,9 +59,7 @@ pub fn build_function(action: Action, console: Identity) -> JsValue {
                     instructions: ops,
                     number_of_vars: repo.cur + 10,
                     meta: FunctionMeta {
-                        line_map: vec![],
-                        column_map: vec![],
-                        code_source: CodeSource::String(Rc::new("".into())),
+                        code_source: CodeSource::String(source.clone()),
                     },
                 }),
                 heap_vars: Rc::new(vec![console_var.clone(), console_var.clone(), console_var]),
@@ -91,45 +99,55 @@ impl StackVarRepo {
 }
 
 fn build_opcode_parts(
-    action: Action,
+    action: LocatedAction,
     target: Target,
     vars: &mut StackVarRepo,
     offset: usize,
+    source: Rc<String>,
 ) -> Vec<Op> {
-    match action {
+    match action.action {
         Action::LoadGlobal(global) => {
             return vec![Op {
                 target,
                 code: OpCode::Transfer {
                     from: Target::Global(global),
                 },
+                loc: action.location,
             }];
         }
         Action::VariableDeclare(decl) => {
             let into = vars.allocate();
             let mut ret = build_opcode_parts(
-                decl.assign.right_side.action,
+                *decl.assign.right_side,
                 Target::Stack(into),
                 vars,
                 offset,
+                source,
             );
             ret.push(Op {
                 target,
                 code: OpCode::Transfer {
                     from: Target::Stack(into),
                 },
+                loc: action.location,
             });
             return ret;
         }
         Action::VariableAssign(assign) => {
             let into = vars.get(&assign.var);
-            let mut ret =
-                build_opcode_parts(assign.right_side.action, Target::Stack(into), vars, offset);
+            let mut ret = build_opcode_parts(
+                *assign.right_side,
+                Target::Stack(into),
+                vars,
+                offset,
+                source,
+            );
             ret.push(Op {
                 target,
                 code: OpCode::Transfer {
                     from: Target::Stack(into),
                 },
+                loc: action.location,
             });
             return ret;
         }
@@ -137,6 +155,7 @@ fn build_opcode_parts(
             return vec![Op {
                 target,
                 code: OpCode::Static { value: lit },
+                loc: action.location,
             }];
         }
         Action::ReadVar(read_var) => {
@@ -145,6 +164,7 @@ fn build_opcode_parts(
                 code: OpCode::Transfer {
                     from: Target::Stack(vars.get(&read_var)),
                 },
+                loc: action.location,
             }];
         }
         Action::Call(call) => {
@@ -155,16 +175,18 @@ fn build_opcode_parts(
             let mut result = Vec::new();
 
             result.append(&mut build_opcode_parts(
-                call.member.action,
+                call.member,
                 Target::Stack(callee_var),
                 vars,
                 offset,
+                source.clone(),
             ));
             result.append(&mut build_opcode_parts(
-                call.args.action,
+                call.args,
                 Target::Stack(args_var),
                 vars,
                 offset + result.len(),
+                source,
             ));
             result.push(Op {
                 target,
@@ -173,6 +195,7 @@ fn build_opcode_parts(
                     what: Target::Stack(callee_var),
                     this: Target::BlackHole,
                 },
+                loc: action.location,
             });
             return result;
         }
@@ -186,16 +209,18 @@ fn build_opcode_parts(
             let to_var = vars.allocate();
 
             result.append(&mut build_opcode_parts(
-                read_prop.from.action,
+                read_prop.from,
                 Target::Stack(from_var),
                 vars,
                 offset,
+                source.clone(),
             ));
             result.append(&mut build_opcode_parts(
-                read_prop.key.action,
+                read_prop.key,
                 Target::Stack(to_var),
                 vars,
                 offset + result.len(),
+                source,
             ));
 
             result.push(Op {
@@ -204,6 +229,7 @@ fn build_opcode_parts(
                     from: Target::Stack(from_var),
                     key: Target::Stack(to_var),
                 },
+                loc: action.location,
             });
             return result;
         }
@@ -211,22 +237,25 @@ fn build_opcode_parts(
         Action::While(wh) => {
             let mut ret = Vec::new();
             ret.append(&mut build_opcode_parts(
-                wh.condition.action,
+                wh.condition,
                 Target::Stack(JUMP_FLAG_LOCATION),
                 vars,
                 offset,
+                source.clone(),
             ));
             let mut body = build_opcode_parts(
-                wh.body.action,
+                wh.body,
                 Target::BlackHole,
                 vars,
                 offset + ret.len() + 1,
+                source,
             );
             ret.push(Op {
                 target: Target::BlackHole,
                 code: OpCode::ConditionalJump {
                     to: offset + ret.len() + body.len() + 1,
                 },
+                loc: action.location,
             });
             ret.append(&mut body);
             return ret;
@@ -242,12 +271,14 @@ fn build_opcode_parts(
         Action::StrictCompare(comp) => {
             let left = vars.allocate();
             let right = vars.allocate();
-            let mut ret = build_opcode_parts(comp.left.action, Target::Stack(left), vars, offset);
+            let mut ret =
+                build_opcode_parts(comp.left, Target::Stack(left), vars, offset, source.clone());
             ret.append(&mut build_opcode_parts(
-                comp.right.action,
+                comp.right,
                 Target::Stack(right),
                 vars,
                 offset + ret.len(),
+                source,
             ));
             ret.push(Op {
                 target,
@@ -255,6 +286,7 @@ fn build_opcode_parts(
                     left: Target::Stack(left),
                     right: Target::Stack(right),
                 },
+                loc: action.location,
             });
             return ret;
         }
@@ -263,12 +295,14 @@ fn build_opcode_parts(
         Action::Add(add) => {
             let left = vars.allocate();
             let right = vars.allocate();
-            let mut ret = build_opcode_parts(add.left.action, Target::Stack(left), vars, offset);
+            let mut ret =
+                build_opcode_parts(add.left, Target::Stack(left), vars, offset, source.clone());
             ret.append(&mut build_opcode_parts(
-                add.right.action,
+                add.right,
                 Target::Stack(right),
                 vars,
                 offset + ret.len(),
+                source,
             ));
             ret.push(Op {
                 target,
@@ -276,6 +310,7 @@ fn build_opcode_parts(
                     left: Target::Stack(left),
                     right: Target::Stack(right),
                 },
+                loc: action.location,
             });
             return ret;
         }
@@ -283,16 +318,18 @@ fn build_opcode_parts(
             let left = vars.allocate();
             let right = vars.allocate();
             let mut ret = build_opcode_parts(
-                arith.left_right.left.action,
+                arith.left_right.left,
                 Target::Stack(left),
                 vars,
                 offset,
+                source.clone(),
             );
             ret.append(&mut build_opcode_parts(
-                arith.left_right.right.action,
+                arith.left_right.right,
                 Target::Stack(right),
                 vars,
                 offset + ret.len(),
+                source.clone(),
             ));
             ret.push(Op {
                 target,
@@ -301,6 +338,7 @@ fn build_opcode_parts(
                     right: Target::Stack(right),
                     variant: arith.variant,
                 },
+                loc: action.location,
             });
             return ret;
         }
@@ -310,6 +348,7 @@ fn build_opcode_parts(
                 code: OpCode::NewObject {
                     is_array: new_obj.is_array,
                 },
+                loc: action.location,
             }];
         }
         Action::InstantiateFunction(f) => {
@@ -321,16 +360,18 @@ fn build_opcode_parts(
 
             let mut repo = StackVarRepo::new(captures);
             let mut instructions = build_opcode_parts(
-                f.content.action,
+                f.content,
                 Target::BlackHole,
                 &mut repo,
                 BEGIN_VARS + f.captures.len(),
+                source.clone(),
             );
             instructions.push(Op {
                 target: Target::BlackHole,
                 code: OpCode::Return {
                     what: Target::BlackHole,
                 },
+                loc: action.location.clone(),
             });
             // TODO return here
             return vec![Op {
@@ -340,9 +381,7 @@ fn build_opcode_parts(
                         instructions,
                         number_of_vars: repo.cur + f.captures.len() + 10,
                         meta: FunctionMeta {
-                            line_map: vec![],
-                            column_map: vec![],
-                            code_source: CodeSource::String(Rc::new("".to_string())),
+                            code_source: CodeSource::String(source),
                         },
                     }),
                     captures: f
@@ -352,6 +391,7 @@ fn build_opcode_parts(
                         .map(|index| Target::Stack(index))
                         .collect(),
                 },
+                loc: action.location.clone(),
             }];
         }
         Action::Block(mut block) => {
@@ -360,7 +400,7 @@ fn build_opcode_parts(
             let original_size = block.content.len();
             for (i, action) in block.content.drain(..).enumerate() {
                 result.append(&mut build_opcode_parts(
-                    action.action,
+                    action,
                     if (original_size - 1) == i {
                         target.clone()
                     } else {
@@ -368,6 +408,7 @@ fn build_opcode_parts(
                     },
                     vars,
                     offset,
+                    source.clone(),
                 ));
             }
             return result;
@@ -378,24 +419,27 @@ fn build_opcode_parts(
             let key_var = vars.allocate();
             let what_var = vars.allocate();
             result.append(&mut build_opcode_parts(
-                assign.to.action,
+                assign.to,
                 Target::Stack(to_var.clone()),
                 vars,
                 offset,
+                source.clone(),
             ));
 
             result.append(&mut build_opcode_parts(
-                assign.key.action,
+                assign.key,
                 Target::Stack(key_var.clone()),
                 vars,
                 offset + result.len(),
+                source.clone(),
             ));
 
             result.append(&mut build_opcode_parts(
-                assign.what.action,
+                assign.what,
                 Target::Stack(what_var.clone()),
                 vars,
                 offset + result.len(),
+                source,
             ));
 
             result.push(Op {
@@ -405,6 +449,7 @@ fn build_opcode_parts(
                     key: Target::Stack(key_var),
                     value: Target::Stack(what_var),
                 },
+                loc: action.location,
             });
             return result;
         }

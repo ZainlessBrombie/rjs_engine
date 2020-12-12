@@ -6,11 +6,46 @@ use crate::js::data::js_types::{Identity, JsValue};
 use crate::js::data::self_time::SelfTime;
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
 
+#[derive(Clone)]
 pub struct CodeLoc {
     pub(crate) line: usize,
     pub(crate) column: usize,
+}
+
+impl Debug for CodeLoc {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "")
+    }
+}
+
+impl CodeLoc {
+    pub fn formatted(&self, source: &str) -> String {
+        let mut ret = String::new();
+        ret.push_str("\u{001b}[0m");
+        for (line_number, line) in source.split("\n").enumerate() {
+            if line_number + 1 == self.line {
+                let mut col = self.column;
+                if col != 0 {
+                    col -= 1;
+                }
+                if col != 0 {
+                    col -= 1;
+                }
+                ret.push_str(&line[..col]);
+                ret.push_str("\u{001b}[42m");
+                ret.push_str(&line[col..(col + 1)]);
+                ret.push_str("\u{001b}[0m");
+                ret.push_str(&line[(col + 1)..]);
+            } else {
+                ret.push_str(line);
+            }
+            ret.push('\n');
+        }
+        return ret;
+    }
 }
 
 pub struct Module {

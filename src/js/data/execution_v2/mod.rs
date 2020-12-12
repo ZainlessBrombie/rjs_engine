@@ -5,6 +5,7 @@ use crate::js::data::execution_v2::function::{
 use crate::js::data::execution_v2::opcode::{Op, OpCode, Target};
 use crate::js::data::execution_v2::stack_element::{FunctionHead, StackElement};
 use crate::js::data::execution_v2::var::JsVar;
+use crate::js::data::intermediate::CodeLoc;
 use crate::js::data::js_types::JsValue;
 use crate::js::data::util::{s_pool, JsObjectBuilder};
 use safe_gc::{Gc, GcCell};
@@ -20,6 +21,7 @@ pub mod var;
 pub struct Stack {
     pub values: Vec<StackElement>,
     pub current_function: usize,
+    pub current_exception: Option<JsValue>,
 }
 
 impl Stack {
@@ -48,25 +50,25 @@ impl Stack {
                             code: Rc::new(OpFunction {
                                 instructions: vec![
                                     Op {
-                                        target: Target::Stack(1),
+                                        target: Target::BlackHole,
                                         code: OpCode::Call {
                                             what: Target::Stack(BEGIN_VARS),
                                             this: Target::BlackHole,
                                             args: Target::Stack(BEGIN_VARS + 1),
                                         },
+                                        loc: CodeLoc { line: 1, column: 0 },
                                     },
                                     Op {
                                         target: Target::BlackHole,
                                         code: OpCode::Return {
                                             what: Target::BlackHole,
                                         },
+                                        loc: CodeLoc { line: 1, column: 5 },
                                     },
                                 ],
                                 number_of_vars: 10,
                                 meta: FunctionMeta {
-                                    line_map: vec![],
-                                    column_map: vec![],
-                                    code_source: CodeSource::String(Rc::new("".into())),
+                                    code_source: CodeSource::String(Rc::new("<init-2>".into())),
                                 },
                             }),
                             heap_vars: Rc::new(vec![]),
@@ -77,7 +79,7 @@ impl Stack {
                 StackElement::Value(JsValue::Undefined),
                 StackElement::Value(JsValue::Undefined),
                 StackElement::Value(JsValue::Undefined),
-                StackElement::HeapVar(function),
+                StackElement::HeapVar(function.clone()),
                 StackElement::Value(
                     JsObjectBuilder::new(None)
                         .with_prop(s_pool("type"), JsValue::String(s_pool("init_arr")))
@@ -87,6 +89,7 @@ impl Stack {
                 StackElement::Value(JsValue::Undefined),
             ],
             current_function: 1,
+            current_exception: None,
         }
     }
 }

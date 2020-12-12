@@ -79,13 +79,6 @@ impl Write for TempFix {
 }
 
 pub fn m1() {
-    println!("Running small test program\n");
-    let mut engine_state = EngineState {
-        tick_queue: vec![],
-        external_calls: Arc::new(Mutex::new(vec![])),
-    };
-    let consumed = engine_state.run_queue(100000000);
-    println!("\nConsumed: {}", consumed);
     let cm: Lrc<SourceMap> = Default::default();
     let handler = Handler::with_emitter(true, false, Box::new(Empty {}));
     let source = "{
@@ -114,9 +107,38 @@ pub fn m1() {
     let mut access = empty_var_access(None, false);
     let console = access.get_or_global(&s_pool("console"));
     let module = parse_module(module, access, Rc::new(source.into()));
-    let mut stack = js::data::execution_v2::Stack::create_stack(build_function(module, console));
+    let mut stack = js::data::execution_v2::Stack::create_stack(build_function(
+        module,
+        console,
+        s_pool(source),
+    ));
 
-    let consumed = run_stack(&mut stack, 10000);
+    let mut steps: usize = 0;
+    let mut target = String::new();
+    println!("Press enter to start debugging...");
+    loop {
+        target.clear();
+        std::io::stdin()
+            .read_line(&mut target)
+            .expect("error: unable to read user input");
+        if target.ends_with("\n") {
+            target.pop();
+        }
+        if target.as_str() == "stop" {
+            break;
+        }
+        let mut do_step = 1;
+        if target.len() != 0 {
+            if let Ok(n) = target.parse::<usize>() {
+                do_step = n;
+            } else {
+                println!("Unknown input '{}'", target);
+                continue;
+            }
+        }
+        steps += run_stack(&mut stack, do_step, true);
+        println!("Step: {}", steps);
+    }
 
-    println!("Consumed: {}", consumed);
+    println!("Consumed: {}", steps);
 }

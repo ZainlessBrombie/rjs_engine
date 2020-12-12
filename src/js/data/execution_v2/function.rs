@@ -1,5 +1,6 @@
 use crate::js::data::execution_v2::opcode::{Op, OpCode};
 use crate::js::data::execution_v2::var::JsVar;
+use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
 
 /// The opcodes belonging to a function
@@ -10,13 +11,17 @@ pub struct OpFunction {
     pub meta: FunctionMeta,
 }
 
+impl Debug for OpFunction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<OpFunction>")
+    }
+}
+
 /// Stores metadata about an OpFunction.
 /// Currently, that's only the debugging information.
 /// Later, other fields may be added, like hits or
 /// caches for optimization
 pub struct FunctionMeta {
-    pub(crate) line_map: Vec<usize>,    // opcode to line
-    pub(crate) column_map: Vec<usize>,  // Opcode to column in line
     pub(crate) code_source: CodeSource, // Source code file
 }
 
@@ -24,6 +29,14 @@ pub struct FunctionMeta {
 pub enum CodeSource {
     String(Rc<String>),
     // Later: File
+}
+
+impl CodeSource {
+    pub fn as_string(&self) -> Rc<String> {
+        match self {
+            CodeSource::String(s) => s.clone(),
+        }
+    }
 }
 
 /// Belongs to a JS Object. Can be executed but is not being executed right now.

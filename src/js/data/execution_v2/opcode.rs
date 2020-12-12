@@ -1,17 +1,20 @@
 use crate::js::data::execution_v2::function::OpFunction;
+use crate::js::data::intermediate::CodeLoc;
 use crate::js::data::js_execution::JsVar;
 use crate::js::data::js_types::JsValue;
 use std::rc::Rc;
 
 /// An op, which the function consists of.
 /// Target refers to the relative local stack pointer.
+#[derive(Debug)]
 pub struct Op {
     pub target: Target,
     pub code: OpCode,
+    pub loc: CodeLoc,
 }
 
 /// A memory target for a value read or write
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Target {
     /// Stack pointer. May be a Value (used as a variable) or a Heap Var
     Stack(usize),
@@ -23,6 +26,7 @@ pub enum Target {
 
 /// An opcode.
 /// If they don't have a target, target is set to BlackHole
+#[derive(Debug)]
 pub enum OpCode {
     Jump {
         to: usize,
@@ -100,7 +104,7 @@ pub enum OpCode {
 }
 
 /// Arithmetic op that takes exactly two parameters
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Arithmetic2Op {
     Add,
     Sub,

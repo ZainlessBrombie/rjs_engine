@@ -2,7 +2,7 @@ use crate::js::data::execution_v2::constants::{
     BEGIN_VARS, HEAD_LOCATION, JUMP_FLAG_LOCATION, RETURN_TO_LOCATION,
 };
 use crate::js::data::execution_v2::function::{FunctionExecution, FunctionInstance};
-use crate::js::data::execution_v2::opcode::{Arithmetic2Op, OpCode, Target};
+use crate::js::data::execution_v2::opcode::{Arithmetic2Op, Op, OpCode, Target};
 use crate::js::data::execution_v2::stack_element::{FunctionHead, StackElement};
 use crate::js::data::execution_v2::var::JsVar;
 use crate::js::data::execution_v2::Stack;
@@ -12,10 +12,10 @@ use safe_gc::{Gc, GcCell};
 use std::f64::NAN;
 use std::rc::Rc;
 
-pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
+pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
     let mut consumed = 0;
 
-    if stack.values.is_empty() {
+    if stack.values.is_empty() || stack.current_function == 0 {
         return 0;
     }
 
@@ -28,9 +28,8 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
     // No need to re-fetch all the time
     let mut instance = head.execution.instance.clone();
 
-    let mut exception: Option<JsValue> = None;
-
     while consumed < run_for {
+        consumed += 1;
         let op = instance
             .code
             .instructions
@@ -38,7 +37,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
             .expect("Method failed to return");
         head.execution.op_pointer += 1;
 
-        if exception.is_some() {
+        if stack.current_exception.is_some() {
             if head.execution.catch_pointer != 0 {
                 head.execution.op_pointer = head.execution.catch_pointer;
             } else {
@@ -52,7 +51,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                 if stack.current_function == 0 {
                     println!(
                         "Uncaught exception!\n{}",
-                        &exception.unwrap().to_system_string()
+                        &stack.current_exception.as_ref().unwrap().to_system_string()
                     );
                     return consumed;
                 }
@@ -138,7 +137,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                 let new_instance = match what_value {
                     JsValue::Object(obj) => match &GcCell::borrow_mut(&Gc::borrow(&obj)).call {
                         JSCallable::NotCallable => {
-                            exception = Some(u_string("cannot call object"));
+                            stack.current_exception = Some(u_string("cannot call object"));
                             continue;
                         }
                         JSCallable::Js { content, creator } => creator.clone(),
@@ -153,7 +152,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                                         StackElement::Value(ok_val);
                                 }
                                 Err(err_val) => {
-                                    exception = Some(err_val);
+                                    stack.current_exception = Some(err_val);
                                 }
                             }
                             continue;
@@ -164,7 +163,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                     // An Option of an exception and walk up a step to the next best try catch
                     // while it is set
                     _ => {
-                        exception = Some(u_string(
+                        stack.current_exception = Some(u_string(
                             &("cannot call value: ".to_string()
                                 + what_value.to_system_string().as_str()),
                         ));
@@ -216,7 +215,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                 }
             }
             OpCode::Throw { what } => {
-                exception = Some(target_read(what, stack, &instance));
+                stack.current_exception = Some(target_read(what, stack, &instance));
             }
             OpCode::Return { what } => {
                 let ret_val = target_read(what, stack, &instance);
@@ -258,7 +257,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                     Ok(ok_val) => {
                         target_write(&op.target, ok_val, stack, &instance);
                     }
-                    Err(err_val) => exception = Some(err_val),
+                    Err(err_val) => stack.current_exception = Some(err_val),
                 };
             }
             OpCode::Nop { .. } => {}
@@ -300,7 +299,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                         target_write(&op.target, ok_val, stack, &instance);
                     }
                     Err(err_val) => {
-                        exception = Some(err_val);
+                        stack.current_exception = Some(err_val);
                     }
                 }
             }
@@ -334,7 +333,27 @@ pub fn run_stack(stack: &mut Stack, run_for: usize) -> usize {
                 &instance,
             ),
         }
+
+        if do_print {
+            let formatted = op
+                .loc
+                .formatted(instance.code.meta.code_source.as_string().as_str());
+            println!(
+                "------------------------------------------\n\n{}",
+                formatted
+            );
+            if stack.current_exception.is_some() {
+                println!("Exception is now set...")
+            }
+            println!("> {}", debug_opt(stack, op, &instance));
+        }
     }
+
+    stack
+        .values
+        .get_mut(stack.current_function)
+        .expect("Current function stack point unavailable")
+        .place_head(head);
 
     return consumed;
 }
@@ -358,6 +377,119 @@ fn capture_heap_var(target: &Target, stack: &mut Stack, head: &FunctionHead) -> 
             panic!("Cannot capture a black hole target!")
         }
     }
+}
+
+fn debug_opt(stack: &Stack, op: &Op, instance: &Rc<FunctionInstance>) -> String {
+    let mut ret = String::new();
+    ret.push_str("Op:");
+    match &op.code {
+        OpCode::Jump { to } => ret.push_str(&format!("Jump <to={}>", to)),
+        OpCode::ConditionalJump { to } => ret.push_str(&format!(
+            "ConditionalJump <to={}; flag={}>",
+            to,
+            stack
+                .values
+                .get(stack.current_function)
+                .map(|cur| cur.assume_value().truthy().to_string())
+                .unwrap_or("<loadfail>".to_string())
+        )),
+        OpCode::NewObject { is_array } => {
+            ret.push_str(&format!("NewObject <is_array={}>", is_array))
+        }
+        OpCode::Not { source } => ret.push_str(&format!(
+            "Jump <to={}>",
+            target_read(source, stack, instance).to_system_string()
+        )),
+        OpCode::Assign { source } => ret.push_str(&format!(
+            "Assign <source={}>",
+            target_read(source, stack, instance).to_system_string()
+        )),
+        OpCode::Static { value } => {
+            ret.push_str(&format!("Static <value={}>", value.to_system_string()))
+        }
+        OpCode::CreateFunction { captures, template } => {
+            ret.push_str(&format!("CreateFunction <captures=",));
+            for cap in captures {
+                ret.push_str(&target_read(cap, stack, instance).to_system_string());
+                ret.push_str("; ");
+            }
+            ret.push_str(">")
+        }
+        OpCode::Call { args, this, what } => ret.push_str(&format!(
+            "Call <this={}; what={}; args={}>",
+            target_read(this, stack, instance).to_system_string(),
+            target_read(what, stack, instance).to_system_string(),
+            target_read(args, stack, instance).to_system_string(),
+        )),
+        OpCode::Throw { what } => ret.push_str(&format!(
+            "Throw <what={}>",
+            target_read(what, stack, instance).to_system_string()
+        )),
+        OpCode::Return { what } => ret.push_str(&format!(
+            "Return <what={}>",
+            target_read(what, stack, instance).to_system_string()
+        )),
+        OpCode::ReadProp { key, from } => ret.push_str(&format!(
+            "ReadProp <from={}; key={}>",
+            target_read(from, stack, instance).to_system_string(),
+            target_read(key, stack, instance).to_system_string()
+        )),
+        OpCode::Nop {} => ret.push_str(&format!("Nop <>",)),
+        OpCode::Transfer { from } => ret.push_str(&format!(
+            "Transfer <from={}>",
+            target_read(from, stack, instance).to_system_string()
+        )),
+        OpCode::FuzzyCompare { right, left } => ret.push_str(&format!(
+            "FuzzyCompare <left={}; right={}>",
+            target_read(right, stack, instance).to_system_string(),
+            target_read(left, stack, instance).to_system_string()
+        )),
+        OpCode::StrictCompare { left, right } => ret.push_str(&format!(
+            "StrictCompare <left={}; right={}>",
+            target_read(right, stack, instance).to_system_string(),
+            target_read(left, stack, instance).to_system_string()
+        )),
+        OpCode::TypeOf { what } => ret.push_str(&format!(
+            "TypeOf <what={}>",
+            target_read(what, stack, instance).to_system_string(),
+        )),
+        OpCode::Await { what } => ret.push_str(&format!(
+            "Await <what={}>",
+            target_read(what, stack, instance).to_system_string(),
+        )),
+        OpCode::AssignProp { of, key, value } => ret.push_str(&format!(
+            "AssignProp <of={}; key={}; value={}>",
+            target_read(of, stack, instance).to_system_string(),
+            target_read(key, stack, instance).to_system_string(),
+            target_read(value, stack, instance).to_system_string()
+        )),
+        OpCode::Add { right, left } => ret.push_str(&format!(
+            "Add <left={}; right={}>",
+            target_read(right, stack, instance).to_system_string(),
+            target_read(left, stack, instance).to_system_string()
+        )),
+        OpCode::Arithmetic2 {
+            left,
+            right,
+            variant,
+        } => ret.push_str(&format!(
+            "Arithmetic2 <left={}; right={}; op={:?}>",
+            target_read(right, stack, instance).to_system_string(),
+            target_read(left, stack, instance).to_system_string(),
+            variant
+        )),
+    }
+    ret.push_str(" => ");
+
+    match &op.target {
+        Target::BlackHole => ret.push_str("[Blackhole]"),
+        _ => ret.push_str(&format!(
+            "{}",
+            target_read(&op.target, stack, instance).to_system_string()
+        )),
+    }
+
+    return ret;
 }
 
 fn assign_prop(to: JsValue, key: JsValue, value: JsValue) -> Result<JsValue, JsValue> {
@@ -563,11 +695,7 @@ fn js_typeof(value: JsValue) -> Rc<String> {
     };
 }
 
-fn target_read(
-    target: &Target,
-    stack: &mut Stack,
-    current_function: &Rc<FunctionInstance>,
-) -> JsValue {
+fn target_read(target: &Target, stack: &Stack, current_function: &Rc<FunctionInstance>) -> JsValue {
     match target {
         Target::Stack(stack_pointer) => {
             match stack

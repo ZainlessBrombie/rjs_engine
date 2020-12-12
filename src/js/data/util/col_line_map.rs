@@ -20,6 +20,7 @@ impl ColLineMap {
             }
             lines.push(cur_line);
             columns.push(cur_col);
+            cur_col += 1;
         }
         return ColLineMap { lines, columns };
     }
