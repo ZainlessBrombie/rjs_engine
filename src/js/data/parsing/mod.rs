@@ -1,7 +1,4 @@
-use crate::js::data::execution_v2::constants::THIS_LOCATION;
 use crate::js::data::execution_v2::opcode::Arithmetic2Op;
-use crate::js::data::execution_v2::opcode::OpCode::ReadProp;
-use crate::js::data::intermediate::Action::VariableAssign;
 use crate::js::data::intermediate::{
     empty_var_access, Action, Arithmetic2Action, AssignProp, CallFunction, CodeLoc, For, IfElse,
     InstantiateFunction, LeftRight, LocatedAction, Module, NewObject, ScopedBlock, VarAccess,
@@ -266,6 +263,20 @@ fn parse_expr(expr: Expr, mut access: RcVarAccess, line_map: Rc<ColLineMap>) -> 
                 }
                 ExprOrSuper::Expr(expr) => expr,
             };
+            if !member.computed {
+                let (val, loc) = match *member.prop {
+                    Expr::Ident(ident) => (ident.sym.to_string(), ident.span.lo.0 as usize),
+                    _ => unimplemented!(),
+                };
+                return js_prop!(
+                    (parse_expr(*obj, access.clone(), line_map.clone()))
+                        [LocatedAction {
+                            action: Action::Literal(JsValue::String(Rc::new(val))),
+                            location: line_map.loc_for(loc)
+                        }]
+                    @ line_map.loc_for(member.span.lo.0 as usize)
+                );
+            }
             return js_prop!(
                 (parse_expr(*obj, access.clone(), line_map.clone()))
                     [parse_expr(*member.prop, access, line_map.clone())]

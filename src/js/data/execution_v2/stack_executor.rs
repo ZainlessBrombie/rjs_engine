@@ -28,9 +28,12 @@ pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
     // No need to re-fetch all the time
     let mut instance = head.execution.instance.clone();
 
+    let mut source_instance;
+
     while consumed < run_for {
         consumed += 1;
-        let op = instance
+        source_instance = instance.clone(); // Lifetime stuff
+        let op = source_instance
             .code
             .instructions
             .get(head.execution.op_pointer)
@@ -288,11 +291,11 @@ pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
                 unimplemented!()
             }
             OpCode::AssignProp { value, key, of } => {
-                let to_val = target_read(value, stack, &instance);
-                let to_key = target_read(key, stack, &instance);
-                let to_of = target_read(of, stack, &instance);
+                let of_val = target_read(of, stack, &instance);
+                let key_val = target_read(key, stack, &instance);
+                let val_val = target_read(value, stack, &instance);
 
-                let result = assign_prop(to_val, to_key, to_of);
+                let result = assign_prop(of_val, key_val, val_val);
 
                 match result {
                     Ok(ok_val) => {
@@ -345,7 +348,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
             if stack.current_exception.is_some() {
                 println!("Exception is now set...")
             }
-            println!("> {}", debug_opt(stack, op, &instance));
+            println!("> {}", debug_op(stack, op, &instance));
         }
     }
 
@@ -379,13 +382,13 @@ fn capture_heap_var(target: &Target, stack: &mut Stack, head: &FunctionHead) -> 
     }
 }
 
-fn debug_opt(stack: &Stack, op: &Op, instance: &Rc<FunctionInstance>) -> String {
+fn debug_op(stack: &Stack, op: &Op, instance: &Rc<FunctionInstance>) -> String {
     let mut ret = String::new();
     ret.push_str("Op:");
     match &op.code {
-        OpCode::Jump { to } => ret.push_str(&format!("Jump <to={}>", to)),
+        OpCode::Jump { to } => ret.push_str(&format!("Jump <to='{}'>", to)),
         OpCode::ConditionalJump { to } => ret.push_str(&format!(
-            "ConditionalJump <to={}; flag={}>",
+            "ConditionalJump <to='{}'; flag='{}'>",
             to,
             stack
                 .values
@@ -394,111 +397,144 @@ fn debug_opt(stack: &Stack, op: &Op, instance: &Rc<FunctionInstance>) -> String 
                 .unwrap_or("<loadfail>".to_string())
         )),
         OpCode::NewObject { is_array } => {
-            ret.push_str(&format!("NewObject <is_array={}>", is_array))
+            ret.push_str(&format!("NewObject <is_array='{}'>", is_array))
         }
         OpCode::Not { source } => ret.push_str(&format!(
-            "Jump <to={}>",
-            target_read(source, stack, instance).to_system_string()
+            "Not <source='{}{}'>",
+            target_read(source, stack, instance).to_log_string(),
+            debug_vartype(source),
         )),
         OpCode::Assign { source } => ret.push_str(&format!(
-            "Assign <source={}>",
-            target_read(source, stack, instance).to_system_string()
+            "Assign <source='{}{}'>",
+            target_read(source, stack, instance).to_log_string(),
+            debug_vartype(source)
         )),
         OpCode::Static { value } => {
-            ret.push_str(&format!("Static <value={}>", value.to_system_string()))
+            ret.push_str(&format!("Static <value='{}'>", value.to_log_string()))
         }
         OpCode::CreateFunction { captures, template } => {
             ret.push_str(&format!("CreateFunction <captures=",));
             for cap in captures {
-                ret.push_str(&target_read(cap, stack, instance).to_system_string());
+                ret.push_str(&target_read(cap, stack, instance).to_log_string());
+                ret.push_str(&debug_vartype(cap));
                 ret.push_str("; ");
             }
             ret.push_str(">")
         }
         OpCode::Call { args, this, what } => ret.push_str(&format!(
-            "Call <this={}; what={}; args={}>",
-            target_read(this, stack, instance).to_system_string(),
-            target_read(what, stack, instance).to_system_string(),
-            target_read(args, stack, instance).to_system_string(),
+            "Call <this='{}{}'; what='{}{}'; args='{}{}'>",
+            target_read(this, stack, instance).to_log_string(),
+            debug_vartype(this),
+            target_read(what, stack, instance).to_log_string(),
+            debug_vartype(what),
+            target_read(args, stack, instance).to_log_string(),
+            debug_vartype(args)
         )),
         OpCode::Throw { what } => ret.push_str(&format!(
-            "Throw <what={}>",
-            target_read(what, stack, instance).to_system_string()
+            "Throw <what='{}{}'>",
+            target_read(what, stack, instance).to_log_string(),
+            debug_vartype(what)
         )),
         OpCode::Return { what } => ret.push_str(&format!(
-            "Return <what={}>",
-            target_read(what, stack, instance).to_system_string()
+            "Return <what='{}{}'>",
+            target_read(what, stack, instance).to_log_string(),
+            debug_vartype(what)
         )),
         OpCode::ReadProp { key, from } => ret.push_str(&format!(
-            "ReadProp <from={}; key={}>",
-            target_read(from, stack, instance).to_system_string(),
-            target_read(key, stack, instance).to_system_string()
+            "ReadProp <from='{}{}'; key='{}{}'>",
+            target_read(from, stack, instance).to_log_string(),
+            debug_vartype(from),
+            target_read(key, stack, instance).to_log_string(),
+            debug_vartype(key)
         )),
         OpCode::Nop {} => ret.push_str(&format!("Nop <>",)),
         OpCode::Transfer { from } => ret.push_str(&format!(
-            "Transfer <from={}>",
-            target_read(from, stack, instance).to_system_string()
+            "Transfer <from='{}{}'>",
+            target_read(from, stack, instance).to_log_string(),
+            debug_vartype(from)
         )),
         OpCode::FuzzyCompare { right, left } => ret.push_str(&format!(
-            "FuzzyCompare <left={}; right={}>",
-            target_read(right, stack, instance).to_system_string(),
-            target_read(left, stack, instance).to_system_string()
+            "FuzzyCompare <left='{}{}'; right='{}{}'>",
+            target_read(left, stack, instance).to_log_string(),
+            debug_vartype(left),
+            target_read(right, stack, instance).to_log_string(),
+            debug_vartype(right),
         )),
         OpCode::StrictCompare { left, right } => ret.push_str(&format!(
-            "StrictCompare <left={}; right={}>",
-            target_read(right, stack, instance).to_system_string(),
-            target_read(left, stack, instance).to_system_string()
+            "StrictCompare <left='{}{}'; right='{}{}'>",
+            target_read(left, stack, instance).to_log_string(),
+            debug_vartype(left),
+            target_read(right, stack, instance).to_log_string(),
+            debug_vartype(right)
         )),
         OpCode::TypeOf { what } => ret.push_str(&format!(
-            "TypeOf <what={}>",
-            target_read(what, stack, instance).to_system_string(),
+            "TypeOf <what='{}{}'>",
+            target_read(what, stack, instance).to_log_string(),
+            debug_vartype(what),
         )),
         OpCode::Await { what } => ret.push_str(&format!(
-            "Await <what={}>",
-            target_read(what, stack, instance).to_system_string(),
+            "Await <what='{}{}'>",
+            target_read(what, stack, instance).to_log_string(),
+            debug_vartype(what),
         )),
         OpCode::AssignProp { of, key, value } => ret.push_str(&format!(
-            "AssignProp <of={}; key={}; value={}>",
-            target_read(of, stack, instance).to_system_string(),
-            target_read(key, stack, instance).to_system_string(),
-            target_read(value, stack, instance).to_system_string()
+            "AssignProp <of='{}{}'; key='{}{}'; value='{}{}'>",
+            target_read(of, stack, instance).to_log_string(),
+            debug_vartype(of),
+            target_read(key, stack, instance).to_log_string(),
+            debug_vartype(of),
+            target_read(value, stack, instance).to_log_string(),
+            debug_vartype(value)
         )),
         OpCode::Add { right, left } => ret.push_str(&format!(
-            "Add <left={}; right={}>",
-            target_read(right, stack, instance).to_system_string(),
-            target_read(left, stack, instance).to_system_string()
+            "Add <left='{}{}'; right='{}{}'>",
+            target_read(left, stack, instance).to_log_string(),
+            debug_vartype(left),
+            target_read(right, stack, instance).to_log_string(),
+            debug_vartype(right)
         )),
         OpCode::Arithmetic2 {
             left,
             right,
             variant,
         } => ret.push_str(&format!(
-            "Arithmetic2 <left={}; right={}; op={:?}>",
-            target_read(right, stack, instance).to_system_string(),
-            target_read(left, stack, instance).to_system_string(),
+            "Arithmetic2 <left='{}{}'; right='{}{}'; op='{:?}'>",
+            target_read(left, stack, instance).to_log_string(),
+            debug_vartype(left),
+            target_read(right, stack, instance).to_log_string(),
+            debug_vartype(right),
             variant
         )),
     }
     ret.push_str(" => ");
 
     match &op.target {
-        Target::BlackHole => ret.push_str("[Blackhole]"),
+        Target::BlackHole => ret.push_str("[hole]"),
         _ => ret.push_str(&format!(
-            "{}",
-            target_read(&op.target, stack, instance).to_system_string()
+            "{}{}",
+            target_read(&op.target, stack, instance).to_log_string(),
+            debug_vartype(&op.target)
         )),
     }
 
     return ret;
 }
 
+fn debug_vartype(target: &Target) -> String {
+    match target {
+        Target::Stack(n) => "[".to_string() + &n.to_string() + "]",
+        Target::Global(v) => "[g:".to_string() + &v + "]",
+        Target::BlackHole => "[hole]".to_string(),
+    }
+}
+
 fn assign_prop(to: JsValue, key: JsValue, value: JsValue) -> Result<JsValue, JsValue> {
     match to {
         JsValue::Undefined => Err(u_string("cannot assign prop to undefined")),
         JsValue::Null => Err(u_string("cannot assign prop to undefined")),
-        JsValue::Number(_) => Ok(key),
-        JsValue::Boolean(_) => Ok(key),
-        JsValue::String(_) => Ok(key),
+        JsValue::Number(_) => Ok(value),
+        JsValue::Boolean(_) => Ok(value),
+        JsValue::String(_) => Ok(value),
         JsValue::Object(obj) => {
             let gc_ref = Gc::borrow(&obj);
             let mut obj_ref = GcCell::borrow_mut(&gc_ref);
@@ -510,10 +546,10 @@ fn assign_prop(to: JsValue, key: JsValue, value: JsValue) -> Result<JsValue, JsV
                         enumerable: false,
                         configurable: true,
                         writable: true,
-                        value,
+                        value: value.clone(),
                     },
                 );
-                return Ok(key);
+                return Ok(value);
             } else {
                 obj_ref.content.insert(
                     key.to_system_string(),
@@ -521,10 +557,10 @@ fn assign_prop(to: JsValue, key: JsValue, value: JsValue) -> Result<JsValue, JsV
                         enumerable: false,
                         configurable: true,
                         writable: true,
-                        value,
+                        value: value.clone(),
                     },
                 );
-                return Ok(key);
+                return Ok(value);
             }
         }
     }

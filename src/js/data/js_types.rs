@@ -246,6 +246,19 @@ impl JsValue {
         return JsValue::String(Rc::new(val.into()));
     }
 
+    // TODO no escaping currently
+    /// Returns a reasonably readable and well-debuggable version of the object
+    pub fn to_log_string(&self) -> Rc<String> {
+        match self {
+            JsValue::Undefined => s_pool("undefined"),
+            JsValue::Null => s_pool("null"),
+            JsValue::Number(n) => Rc::new(n.to_string()),
+            JsValue::Boolean(b) => Rc::new(b.to_string()),
+            JsValue::String(s) => Rc::new("\"".to_string() + s.as_str() + "\""),
+            JsValue::Object(obj) => s_pool("[Object]"), // TODO
+        }
+    }
+
     /// Returns the safe, system internal representation of the string
     /// like used in templating. Safe means no execution. Strings are returned literally.
     /// Very long arrays with a lot of empties may produce a lot of commas

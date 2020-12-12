@@ -32,8 +32,10 @@ pub fn build_function(action: Action, console: Identity, source: Rc<String>) -> 
         name: Rc::new("console".to_string()),
         value: Gc::new(GcCell::new(console_obj)),
     };
-    let mut repo = StackVarRepo::new(Default::default());
-    repo.by_id.insert(console, BEGIN_VARS);
+    let mut map = HashMap::new();
+    map.insert(console, BEGIN_VARS);
+    let mut repo = StackVarRepo::new(map);
+
     let mut ops = build_opcode_parts(
         LocatedAction {
             action,
@@ -62,7 +64,7 @@ pub fn build_function(action: Action, console: Identity, source: Rc<String>) -> 
                         code_source: CodeSource::String(source.clone()),
                     },
                 }),
-                heap_vars: Rc::new(vec![console_var.clone(), console_var.clone(), console_var]),
+                heap_vars: Rc::new(vec![console_var.clone()]),
             }),
         })
         .build();
