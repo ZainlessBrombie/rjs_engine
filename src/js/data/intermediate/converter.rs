@@ -238,24 +238,29 @@ fn build_opcode_parts(
         Action::IfElse(_) => {}
         Action::While(wh) => {
             let mut ret = Vec::new();
+            let mut body =
+                build_opcode_parts(wh.body, Target::BlackHole, vars, offset + 1, source.clone());
+            ret.push(Op {
+                target,
+                code: OpCode::Jump {
+                    to: offset + body.len() + 1,
+                },
+                loc: action.location.clone(),
+            });
+            ret.append(&mut body);
+
             ret.append(&mut build_opcode_parts(
                 wh.condition,
                 Target::Stack(JUMP_FLAG_LOCATION),
                 vars,
-                offset,
+                offset + ret.len(),
                 source.clone(),
             ));
-            let mut body = build_opcode_parts(
-                wh.body,
-                Target::BlackHole,
-                vars,
-                offset + ret.len() + 1,
-                source,
-            );
+
             ret.push(Op {
                 target: Target::BlackHole,
                 code: OpCode::ConditionalJump {
-                    to: offset + ret.len() + body.len() + 1,
+                    to: offset + 1, // body pos 0
                 },
                 loc: action.location,
             });
@@ -268,7 +273,15 @@ fn build_opcode_parts(
         }
         Action::BoolAnd(_) => {}
         Action::BoolOr(_) => {}
-        Action::BoolNot(_) => {}
+        Action::BoolNot(not) => {
+            let mut ret = build_opcode_parts(*not, target.clone(), vars, offset, source.clone());
+            ret.push(Op {
+                target: target.clone(),
+                code: OpCode::Not { source: target },
+                loc: action.location,
+            });
+            return ret;
+        }
         Action::FuzzyCompare(_) => {}
         Action::StrictCompare(comp) => {
             let left = vars.allocate();
@@ -409,7 +422,7 @@ fn build_opcode_parts(
                         Target::BlackHole
                     },
                     vars,
-                    offset,
+                    offset + result.len(),
                     source.clone(),
                 ));
             }

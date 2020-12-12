@@ -18,6 +18,7 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use swc_common::errors::{DiagnosticBuilder, Emitter};
 use swc_common::sync::Lrc;
 use swc_common::{errors::Handler, FileName, SourceMap};
@@ -81,9 +82,16 @@ impl Write for TempFix {
 pub fn m1() {
     let cm: Lrc<SourceMap> = Default::default();
     let handler = Handler::with_emitter(true, false, Box::new(Empty {}));
-    let source = "{
-        console.log('Hello World');
-    }";
+    let source = "\
+
+let a = 1000;
+let n = 1000000;
+while (n !== 0) {
+    n = n - 1;
+    a = a + n;
+}
+
+console.log('N:', ' ', a);";
     let fm = cm.new_source_file(FileName::Custom("test.js".into()), source.into());
     let lexer = Lexer::new(
         Syntax::Es(Default::default()),
@@ -115,7 +123,7 @@ pub fn m1() {
 
     let mut steps: usize = 0;
     let mut target = String::new();
-    println!("Press enter to start debugging...");
+    println!("Press enter to start debugging or type 'run' to complete the program...");
     loop {
         target.clear();
         std::io::stdin()
@@ -125,6 +133,16 @@ pub fn m1() {
             target.pop();
         }
         if target.as_str() == "stop" {
+            break;
+        }
+        if target.as_str() == "timed" {
+            let before = Instant::now();
+            steps += run_stack(&mut stack, 100000000, false);
+            println!("{}ms", (Instant::now() - before).as_millis());
+            break;
+        }
+        if target.as_str() == "run" {
+            steps += run_stack(&mut stack, 100000000, false);
             break;
         }
         let mut do_step = 1;

@@ -14,9 +14,10 @@ use std::process::exit;
 use std::rc::Rc;
 use swc_common::Spanned;
 use swc_ecma_ast::{
-    BinaryOp, Decl, EmptyStmt, Expr, ExprOrSuper, Function, Lit, ModuleItem, Pat, Stmt,
+    BinaryOp, Decl, EmptyStmt, Expr, ExprOrSuper, Function, Lit, ModuleItem, Pat, PatOrExpr, Stmt,
     VarDeclOrExpr,
 };
+use swc_ecma_parser::token::Token::AssignOp;
 
 thread_local! {
     static THIS_ID: Identity = Identity::new();
@@ -101,7 +102,7 @@ fn parse_stmt(stmt: Stmt, access: RcVarAccess, line_map: Rc<ColLineMap>) -> Loca
         Stmt::Try(_) => {}
         Stmt::While(while_loop) => {
             let mut access: RcVarAccess = empty_var_access(Some(access), false);
-            js_while!((parse_expr(*while_loop.test, access.clone(), line_map.clone())) {
+            return js_while!((parse_expr(*while_loop.test, access.clone(), line_map.clone())) {
                 parse_stmt(*while_loop.body, access.clone(), line_map.clone())
             } @ line_map.loc_for(while_loop.span.lo.0 as usize));
         }
@@ -255,7 +256,20 @@ fn parse_expr(expr: Expr, mut access: RcVarAccess, line_map: Rc<ColLineMap>) -> 
             }
             BinaryOp::NullishCoalescing => {}
         },
-        Expr::Assign(_) => {}
+        Expr::Assign(assign) => {
+            let name = match assign.left {
+                PatOrExpr::Expr(_) => {
+                    unimplemented!()
+                }
+                PatOrExpr::Pat(pat) => match *pat {
+                    Pat::Ident(id) => id.sym.to_string(),
+                    _ => {
+                        unimplemented!()
+                    }
+                },
+            };
+            return js_var!((access.get_or_global(&Rc::new(name))) = (parse_expr(*assign.right, access, line_map.clone())) @ line_map.loc_for(assign.span.lo.0 as usize));
+        }
         Expr::Member(member) => {
             let obj = match member.obj {
                 ExprOrSuper::Super(_) => {

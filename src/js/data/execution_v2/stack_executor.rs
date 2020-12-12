@@ -392,7 +392,7 @@ fn debug_op(stack: &Stack, op: &Op, instance: &Rc<FunctionInstance>) -> String {
             to,
             stack
                 .values
-                .get(stack.current_function)
+                .get(stack.current_function + JUMP_FLAG_LOCATION)
                 .map(|cur| cur.assume_value().truthy().to_string())
                 .unwrap_or("<loadfail>".to_string())
         )),
