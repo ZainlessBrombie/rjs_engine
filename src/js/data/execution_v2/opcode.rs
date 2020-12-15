@@ -1,3 +1,4 @@
+use crate::js::data::execution_v2::constants::JUMP_FLAG_LOCATION;
 use crate::js::data::execution_v2::function::OpFunction;
 use crate::js::data::intermediate::CodeLoc;
 use crate::js::data::js_execution::JsVar;
@@ -121,4 +122,173 @@ pub enum Arithmetic2Op {
     Multi,
     Div,
     Pow,
+}
+
+impl Op {
+    pub fn op_stats(&mut self) -> OpStats {
+        let mut sources = Vec::new();
+        let targets = vec![&mut self.target];
+        let mut depends_unknown = false;
+        let mut affects_unknown = false;
+        match &mut self.code {
+            OpCode::Jump { .. } => {}
+            OpCode::ConditionalJump { .. } => {
+                // sources.push(&mut Target::Stack(JUMP_FLAG_LOCATION));
+                depends_unknown = true; // Jump source cannot be changed right now TODO
+            }
+            OpCode::NewObject { .. } => {}
+            OpCode::Not { source } => {
+                sources.push(source);
+            }
+            OpCode::Assign { source } => {
+                sources.push(source);
+            }
+            OpCode::Static { .. } => {}
+            OpCode::CreateFunction {
+                captures,
+                template: _,
+            } => {
+                sources.append(&mut captures.iter_mut().collect());
+            }
+            OpCode::Call { what, args, this } => {
+                sources.push(what);
+                sources.push(args);
+                sources.push(this);
+                affects_unknown = true;
+            }
+            OpCode::Throw { what } => {
+                sources.push(what);
+                affects_unknown = true;
+            }
+            OpCode::Return { what } => {
+                sources.push(what);
+                affects_unknown = true;
+            }
+            OpCode::ReadProp { key, from } => {
+                sources.push(key);
+                sources.push(from);
+                affects_unknown = true; // May throw
+            }
+            OpCode::Nop { .. } => {}
+            OpCode::Transfer { from } => {
+                sources.push(from);
+            }
+            OpCode::FuzzyCompare { right, left } => {
+                sources.push(left);
+                sources.push(right);
+            }
+            OpCode::StrictCompare { left, right } => {
+                sources.push(left);
+                sources.push(right);
+            }
+            OpCode::TypeOf { what } => {
+                sources.push(what);
+            }
+            OpCode::Await { what } => {
+                sources.push(what);
+            }
+            OpCode::AssignProp { key, value, of } => {
+                sources.push(key);
+                sources.push(value);
+                sources.push(of);
+                affects_unknown = true; // Assigning a prop is a side effect, we are not a pure function
+                depends_unknown = true; // May throw
+            }
+            OpCode::Add { right, left } => {
+                sources.push(left);
+                sources.push(right);
+            }
+            OpCode::Arithmetic2 {
+                left,
+                right,
+                variant: _,
+            } => {
+                sources.push(left);
+                sources.push(right);
+            }
+        };
+
+        let mut stack_sources = vec![];
+        for source in sources {
+            match source {
+                Target::Stack(n) => {
+                    stack_sources.push(n);
+                }
+                Target::Global(_) => {
+                    depends_unknown = true;
+                } // TODO what about heap variables that have a ref on the stack?
+                Target::BlackHole => {}
+            }
+        }
+        let mut stack_targets = vec![];
+        for target in targets {
+            match target {
+                Target::Stack(n) => {
+                    stack_targets.push(n);
+                }
+                Target::Global(_) => {
+                    affects_unknown = true;
+                } // TODO what about heap variables that have a ref on the stack?
+                Target::BlackHole => {}
+            }
+        }
+
+        return OpStats {
+            side_effects: SideEffects {
+                side_source: depends_unknown,
+                side_target: affects_unknown,
+            },
+            sources: stack_sources,
+            targets: stack_targets,
+        };
+    }
+
+    // TODO find better name
+    /// Move the jump target by x.
+    pub fn move_op_target(&mut self, offset: i32) {
+        match &mut self.code {
+            OpCode::Jump { to } => {
+                *to = (*to as i32 + offset) as usize;
+            }
+            OpCode::ConditionalJump { to } => {
+                *to = (*to as i32 + offset) as usize;
+            }
+            OpCode::NewObject { .. } => {}
+            OpCode::Not { .. } => {}
+            OpCode::Assign { .. } => {}
+            OpCode::Static { .. } => {}
+            OpCode::CreateFunction { .. } => {}
+            OpCode::Call { .. } => {}
+            OpCode::Throw { .. } => {}
+            OpCode::Return { .. } => {}
+            OpCode::ReadProp { .. } => {}
+            OpCode::Nop { .. } => {}
+            OpCode::Transfer { .. } => {}
+            OpCode::FuzzyCompare { .. } => {}
+            OpCode::StrictCompare { .. } => {}
+            OpCode::TypeOf { .. } => {}
+            OpCode::Await { .. } => {}
+            OpCode::AssignProp { .. } => {}
+            OpCode::Add { .. } => {}
+            OpCode::Arithmetic2 { .. } => {}
+        }
+    }
+}
+
+pub struct OpStats<'a> {
+    /// Don't optimize if it does
+    side_effects: SideEffects,
+    sources: Vec<&'a mut usize>,
+    targets: Vec<&'a mut usize>,
+}
+
+impl<'a> OpStats<'a> {
+    pub fn is_pure(&self) -> bool {
+        return !self.side_effects.side_source && !self.side_effects.side_target;
+    }
+}
+
+pub struct SideEffects {
+    side_source: bool,
+    side_target: bool,
 }

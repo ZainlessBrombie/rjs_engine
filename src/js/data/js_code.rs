@@ -82,16 +82,14 @@ impl Write for TempFix {
 pub fn m1() {
     let cm: Lrc<SourceMap> = Default::default();
     let handler = Handler::with_emitter(true, false, Box::new(Empty {}));
-    let source = "\
-
-let a = 1000;
-let n = 1000000;
-while (n !== 0) {
-    n = n - 1;
-    a = a + n;
+    let source = "
+function a() {
+    console.log('A called');
 }
 
-console.log('N:', ' ', a);";
+a()
+
+";
     let fm = cm.new_source_file(FileName::Custom("test.js".into()), source.into());
     let lexer = Lexer::new(
         Syntax::Es(Default::default()),

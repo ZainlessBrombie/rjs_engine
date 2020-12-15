@@ -44,7 +44,7 @@ pub fn parse_module(module: swc_ecma_ast::Module, vars: RcVarAccess, source: Rc<
     }));
 }
 
-fn parse_stmt(stmt: Stmt, access: RcVarAccess, line_map: Rc<ColLineMap>) -> LocatedAction {
+fn parse_stmt(stmt: Stmt, mut access: RcVarAccess, line_map: Rc<ColLineMap>) -> LocatedAction {
     match stmt {
         Stmt::Block(block) => {
             let lo = block.span.lo.0;
@@ -142,8 +142,10 @@ fn parse_stmt(stmt: Stmt, access: RcVarAccess, line_map: Rc<ColLineMap>) -> Loca
         Stmt::Decl(decl) => match decl {
             Decl::Class(_) => {}
             Decl::Fn(f) => {
-                let mut access = empty_var_access(Some(access), true);
-                return parse_function(f.function, access, line_map.clone());
+                let fn_var = access.local_declare(Rc::new(f.ident.sym.to_string()));
+                let access = empty_var_access(Some(access), true);
+                let lo = f.function.span.lo.0;
+                return js_var!((fn_var) = (parse_function(f.function, access, line_map.clone())) @ line_map.loc_for(lo as usize));
             }
             Decl::Var(var_decl) => {
                 return parse_var_decl(var_decl, access, line_map.clone());
@@ -171,6 +173,14 @@ fn parse_expr(expr: Expr, mut access: RcVarAccess, line_map: Rc<ColLineMap>) -> 
         Expr::Array(arr_lit) => {}
         Expr::Object(_) => {}
         Expr::Fn(function) => {
+            if let Some(ident) = &function.ident {
+                let lo = function.function.span.lo.0 as usize;
+                return js_var!(
+                    (access.local_declare(Rc::new(ident.sym.to_string()))) =
+                        (parse_function(function.function, access, line_map.clone()))
+                        @ line_map.loc_for(lo)
+                );
+            }
             return parse_function(function.function, access, line_map.clone());
         }
         Expr::Unary(_) => {}

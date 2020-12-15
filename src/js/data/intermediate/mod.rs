@@ -34,6 +34,12 @@ impl CodeLoc {
                 if col != 0 {
                     col -= 1;
                 }
+                if line.len() < col + 1 {
+                    ret.push_str("\u{001b}[41m");
+                    ret.push_str(line);
+                    ret.push_str("\u{001b}[0m");
+                    continue;
+                }
                 ret.push_str(&line[..col]);
                 ret.push_str("\u{001b}[42m");
                 ret.push_str(&line[col..(col + 1)]);

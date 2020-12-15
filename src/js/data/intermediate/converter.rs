@@ -10,6 +10,7 @@ use crate::js::data::js_types::{Identity, JSCallable, JsValue};
 use crate::js::data::util::{s_pool, JsObjectBuilder};
 use safe_gc::{Gc, GcCell};
 use std::collections::{HashMap, HashSet};
+use std::iter::FromIterator;
 use std::rc::Rc;
 
 pub fn build_function(action: Action, console: Identity, source: Rc<String>) -> JsValue {
@@ -98,6 +99,63 @@ impl StackVarRepo {
             return ret;
         }
     }
+}
+
+/*
+fn optimize_ops(mut ops: Vec<Op>) -> Vec<Op> {
+    if ops.is_empty() {
+        return ops;
+    }
+    let mut ptr_to_op_pos = HashMap::new();
+    let mut prev = HashMap::new();
+    let mut next = HashMap::new();
+
+    for (pos, op) in ops.iter().enumerate() {
+        ptr_to_op_pos.insert(op as *const Op, pos);
+        if let Some(next_op) = ops.get(pos + 1) {
+            next.insert(op as *const Op, next_op as *const Op);
+        }
+        if pos > 0 {
+            prev.insert(op as *const Op, ops.get(pos - 1).unwrap() as *const Op);
+        }
+    }
+
+    // jump splits
+    // TODO this is n²
+    while !to_handle.is_empty() {
+        let handled2 = HashSet::new();
+    }
+
+    unimplemented!()
+}
+*/
+
+fn reads_writes_from_here(
+    start: *const Op,
+    next: &HashMap<*const Op, (*const Op, *const Op)>,
+    handled: &HashSet<*const Op>,
+    reads: &HashMap<*const Op, *const usize>,
+    assigns: &HashMap<*const Op, *const usize>,
+) -> Vec<*const usize> {
+    if handled.contains(&start) {
+        return Vec::new();
+    }
+    let mut handled = HashSet::from_iter(handled.iter().map(|a| *a));
+    handled.insert(start);
+    let mut ret = Vec::new();
+    let our_assign = *assigns.get(&start).unwrap_or(&(0 as *const usize));
+
+    if let Some((a, b)) = next.get(&start) {
+        let mut a_reads = reads_writes_from_here(*a, next, &handled, reads, assigns);
+        ret.append(&mut a_reads);
+
+        let mut b_reads = reads_writes_from_here(*b, next, &handled, reads, assigns);
+        ret.append(&mut b_reads);
+    }
+
+    ret.push(*reads.get(&start).unwrap_or(&(0 as *const usize)));
+
+    return ret.drain(..).filter(|el| *el != our_assign).collect();
 }
 
 fn build_opcode_parts(
