@@ -1,6 +1,6 @@
 use crate::js::data::execution_v2::function::FunctionExecution;
 use crate::js::data::execution_v2::var::JsVar;
-use crate::js::data::js_types::{Identity, JsValue};
+use crate::js::data::js_types::JsValue;
 
 pub struct FunctionHead {
     pub prev_function: usize,
@@ -24,14 +24,14 @@ impl Default for StackElement {
 impl StackElement {
     pub fn assume_head(&mut self) -> FunctionHead {
         match std::mem::take(self) {
-            StackElement::FunctionHead(mut head) => head,
+            StackElement::FunctionHead(head) => head,
             _ => {
                 panic!("Element is not a FunctionHead")
             }
         }
     }
 
-    pub fn place_head(&mut self, mut head: FunctionHead) {
+    pub fn place_head(&mut self, head: FunctionHead) {
         std::mem::swap(self, &mut StackElement::FunctionHead(head))
     }
 

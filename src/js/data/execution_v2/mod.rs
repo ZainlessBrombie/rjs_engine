@@ -13,6 +13,7 @@ use std::rc::Rc;
 
 pub mod constants;
 pub mod function;
+pub mod native_fn;
 pub mod opcode;
 pub mod stack_element;
 pub mod stack_executor;
@@ -29,7 +30,7 @@ impl Stack {
         let global = JsVar {
             name: Rc::new("".to_string()),
             value: Gc::new(GcCell::new(
-                JsObjectBuilder::new(None)
+                JsObjectBuilder::new()
                     .with_prop(Rc::new("type".into()), JsValue::String(s_pool("global")))
                     .build(),
             )),
@@ -81,7 +82,7 @@ impl Stack {
                 StackElement::Value(JsValue::Undefined),
                 StackElement::HeapVar(function.clone()),
                 StackElement::Value(
-                    JsObjectBuilder::new(None)
+                    JsObjectBuilder::new()
                         .with_prop(s_pool("type"), JsValue::String(s_pool("init_arr")))
                         .build(),
                 ),

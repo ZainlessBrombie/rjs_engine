@@ -1,23 +1,20 @@
 use crate::js::data::execution_v2::opcode::Arithmetic2Op;
 use crate::js::data::intermediate::{
     empty_var_access, Action, Arithmetic2Action, AssignProp, CallFunction, CodeLoc, For, IfElse,
-    InstantiateFunction, LeftRight, LocatedAction, Module, NewObject, ScopedBlock, VarAccess,
-    VarAccessTrait, VarAssign, VarDecl, While,
+    InstantiateFunction, LeftRight, LocatedAction, NewObject, ScopedBlock, VarAccess,
+    VarAccessTrait, VarAssign, While,
 };
 use crate::js::data::js_types::{Identity, JsValue};
 use crate::js::data::util::col_line_map::ColLineMap;
-use crate::js::data::util::{s_pool, u_bool, u_string, u_true};
+use crate::js::data::util::u_string;
 use crate::*;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
-use std::process::exit;
 use std::rc::Rc;
 use swc_common::Spanned;
 use swc_ecma_ast::{
     BinaryOp, Decl, EmptyStmt, Expr, ExprOrSuper, Function, Lit, ModuleItem, Pat, PatOrExpr, Stmt,
     VarDeclOrExpr,
 };
-use swc_ecma_parser::token::Token::AssignOp;
 
 thread_local! {
     static THIS_ID: Identity = Identity::new();
@@ -101,14 +98,14 @@ fn parse_stmt(stmt: Stmt, mut access: RcVarAccess, line_map: Rc<ColLineMap>) -> 
         }
         Stmt::Try(_) => {}
         Stmt::While(while_loop) => {
-            let mut access: RcVarAccess = empty_var_access(Some(access), false);
+            let access: RcVarAccess = empty_var_access(Some(access), false);
             return js_while!((parse_expr(*while_loop.test, access.clone(), line_map.clone())) {
                 parse_stmt(*while_loop.body, access.clone(), line_map.clone())
             } @ line_map.loc_for(while_loop.span.lo.0 as usize));
         }
         Stmt::DoWhile(_) => {}
         Stmt::For(for_loop) => {
-            let mut access = empty_var_access(Some(access), false);
+            let access = empty_var_access(Some(access), false);
             return js_for!((
             if for_loop.init.is_some() {
                 match for_loop.init.unwrap() {
@@ -170,7 +167,7 @@ fn parse_expr(expr: Expr, mut access: RcVarAccess, line_map: Rc<ColLineMap>) -> 
                 location: line_map.loc_for(this.span.lo.0 as usize),
             }
         }
-        Expr::Array(arr_lit) => {}
+        Expr::Array(_arr_lit) => {}
         Expr::Object(_) => {}
         Expr::Fn(function) => {
             if let Some(ident) = &function.ident {

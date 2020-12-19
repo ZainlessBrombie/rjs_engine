@@ -1,4 +1,4 @@
-use crate::js::data::execution_v2::opcode::{Op, OpCode};
+use crate::js::data::execution_v2::opcode::Op;
 use crate::js::data::execution_v2::var::JsVar;
 use std::fmt::{Debug, Formatter};
 use std::rc::Rc;

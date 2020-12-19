@@ -1,23 +1,19 @@
 pub mod col_line_map;
 
-use crate::js::data::engine_constants::ConstantStrings;
-use crate::js::data::js_execution::{native_from, EngineQueuer, FnOpRepr, JsVar, VarAlloc};
-use crate::js::data::js_types::{Identity, JSCallable, JsFn, JsObj, JsProperty, JsValue};
+use crate::js::data::js_types::{Identity, JSCallable, JsObj, JsProperty, JsValue};
 use safe_gc::{Gc, GcCell};
-use std::borrow::BorrowMut;
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::rc::Rc;
 
-pub struct JsObjectBuilder<'a> {
+pub struct JsObjectBuilder {
     obj: JsObj,
-    strings: Option<&'a ConstantStrings>,
 }
 
-impl<'a> JsObjectBuilder<'a> {
-    pub fn new(constants: Option<&ConstantStrings>) -> JsObjectBuilder {
+impl<'a> JsObjectBuilder {
+    pub fn new() -> JsObjectBuilder {
         return JsObjectBuilder {
             obj: JsObj {
                 is_array: false,
@@ -27,7 +23,6 @@ impl<'a> JsObjectBuilder<'a> {
                 identity: Identity::new(),
                 is_symbol: false,
             },
-            strings: constants,
         };
     }
 
@@ -56,10 +51,7 @@ impl<'a> JsObjectBuilder<'a> {
     }
 
     pub fn with_proto(self, proto: JsValue) -> Self {
-        let proto_str = self
-            .strings
-            .map(|s| s.proto.clone())
-            .unwrap_or_else(|| Rc::new("__proto__".into()));
+        let proto_str = s_pool("__proto__");
         return self.with_prop_full(proto_str, proto, false, false, false);
     }
 

@@ -3,8 +3,7 @@ mod macros;
 
 use crate::js::data::execution_v2::opcode::Arithmetic2Op;
 use crate::js::data::js_types::{Identity, JsValue};
-use crate::js::data::self_time::SelfTime;
-use std::cell::{RefCell, RefMut};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::rc::Rc;

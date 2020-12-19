@@ -1,23 +1,14 @@
-/*pub trait JsValueTrait {
-    fn to_native_string(&self) -> String;
-
-    fn call(&self) -> dyn JsValue;
-
-    fn lookup(&self, key: &dyn JsValue) -> dyn JsValue;
-
-    fn type_of(&self) -> dyn JsValue;
-}*/
-
-use crate::js::data::execution_v2::function::FunctionInstance;
-use crate::js::data::js_execution::{FnOpRepr, JsVar, NativeFunction};
-use crate::js::data::util::{s_pool, u_undefined};
-use safe_gc::{Gc, GcCell, Mark};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use safe_gc::{Gc, GcCell, Mark};
+
+use crate::js::data::execution_v2::function::FunctionInstance;
+use crate::js::data::execution_v2::native_fn::NativeFunction;
+use crate::js::data::util::{s_pool, u_undefined};
 
 #[derive(Mark)]
 pub struct JsProperty {
@@ -56,14 +47,6 @@ pub fn next_err() -> Box<dyn JsNext> {
     }
     Box::new(ErrNext {})
 }
-
-#[derive(Mark, Clone)]
-pub struct JsFn {
-    pub(crate) ops: Rc<FnOpRepr>,
-    pub(crate) captures: Rc<Vec<JsVar>>,
-}
-
-impl JsFn {}
 
 #[derive(Clone)]
 pub enum JSCallable {
@@ -209,7 +192,7 @@ impl Hash for JsValue {
         match self {
             JsValue::Undefined => state.write_u8(0),
             JsValue::Null => state.write_u8(0),
-            JsValue::Number(n) => unsafe { state.write_u64(std::mem::transmute(*n)) },
+            JsValue::Number(n) => state.write_u64(n.to_bits()),
             JsValue::Boolean(b) => b.hash(state),
             JsValue::String(str) => str.hash(state),
             JsValue::Object(jsobj) => jsobj.borrow().borrow().identity.hash(state),
@@ -255,7 +238,7 @@ impl JsValue {
             JsValue::Number(n) => Rc::new(n.to_string()),
             JsValue::Boolean(b) => Rc::new(b.to_string()),
             JsValue::String(s) => Rc::new("\"".to_string() + s.as_str() + "\""),
-            JsValue::Object(obj) => s_pool("[Object]"), // TODO
+            JsValue::Object(_obj) => s_pool("[Object]"), // TODO
         }
     }
 

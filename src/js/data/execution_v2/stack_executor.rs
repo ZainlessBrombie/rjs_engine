@@ -82,7 +82,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
                 }
             }
             OpCode::NewObject { is_array } => {
-                let mut object_builder = JsObjectBuilder::new(None);
+                let mut object_builder = JsObjectBuilder::new();
                 if *is_array {
                     object_builder = object_builder.with_being_array();
                 }
@@ -104,7 +104,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
                 target_write(&op.target, value.clone(), stack, &instance);
             }
             OpCode::CreateFunction { captures, template } => {
-                let value = JsObjectBuilder::new(None)
+                let value = JsObjectBuilder::new()
                     .with_callable(JSCallable::Js {
                         content: Rc::new("".to_string()),
                         creator: Rc::new(FunctionInstance {
@@ -143,7 +143,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
                             stack.current_exception = Some(u_string("cannot call object"));
                             continue;
                         }
-                        JSCallable::Js { content, creator } => creator.clone(),
+                        JSCallable::Js { content: _, creator } => creator.clone(),
                         JSCallable::Native { op } => {
                             let result = op.call(this_value, args_value);
                             match result {
@@ -287,7 +287,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
 
                 target_write(&op.target, JsValue::String(type_val), stack, &instance);
             }
-            OpCode::Await { what } => {
+            OpCode::Await { what: _ } => {
                 unimplemented!()
             }
             OpCode::AssignProp { value, key, of } => {
@@ -361,7 +361,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
     return consumed;
 }
 
-fn capture_heap_var(target: &Target, stack: &mut Stack, head: &FunctionHead) -> JsVar {
+fn capture_heap_var(target: &Target, stack: &mut Stack, _head: &FunctionHead) -> JsVar {
     match target {
         Target::Stack(stack_index) => {
             match stack
@@ -412,7 +412,7 @@ fn debug_op(stack: &Stack, op: &Op, instance: &Rc<FunctionInstance>) -> String {
         OpCode::Static { value } => {
             ret.push_str(&format!("Static <value='{}'>", value.to_log_string()))
         }
-        OpCode::CreateFunction { captures, template } => {
+        OpCode::CreateFunction { captures, template: _ } => {
             ret.push_str(&format!("CreateFunction <captures=",));
             for cap in captures {
                 ret.push_str(&target_read(cap, stack, instance).to_log_string());
@@ -731,7 +731,7 @@ fn js_typeof(value: JsValue) -> Rc<String> {
     };
 }
 
-fn target_read(target: &Target, stack: &Stack, current_function: &Rc<FunctionInstance>) -> JsValue {
+fn target_read(target: &Target, stack: &Stack, _current_function: &Rc<FunctionInstance>) -> JsValue {
     match target {
         Target::Stack(stack_pointer) => {
             match stack
@@ -807,7 +807,7 @@ fn target_write(
     target: &Target,
     what: JsValue,
     stack: &mut Stack,
-    current_function: &Rc<FunctionInstance>,
+    _current_function: &Rc<FunctionInstance>,
 ) {
     match target {
         Target::Stack(stack_pointer) => {

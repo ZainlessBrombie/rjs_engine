@@ -2,10 +2,10 @@ use crate::js::data::execution_v2::constants::{BEGIN_VARS, JUMP_FLAG_LOCATION};
 use crate::js::data::execution_v2::function::{
     CodeSource, FunctionInstance, FunctionMeta, OpFunction,
 };
+use crate::js::data::execution_v2::native_fn::native_from;
 use crate::js::data::execution_v2::opcode::{Op, OpCode, Target};
 use crate::js::data::execution_v2::var::JsVar;
 use crate::js::data::intermediate::{Action, CodeLoc, LocatedAction};
-use crate::js::data::js_execution::native_from;
 use crate::js::data::js_types::{Identity, JSCallable, JsValue};
 use crate::js::data::util::{s_pool, JsObjectBuilder};
 use safe_gc::{Gc, GcCell};
@@ -14,10 +14,10 @@ use std::iter::FromIterator;
 use std::rc::Rc;
 
 pub fn build_function(action: Action, console: Identity, source: Rc<String>) -> JsValue {
-    let console_obj = JsObjectBuilder::new(None)
+    let console_obj = JsObjectBuilder::new()
         .with_prop(
             s_pool("log"),
-            JsObjectBuilder::new(None)
+            JsObjectBuilder::new()
                 .with_callable(JSCallable::Native {
                     op: native_from(|_this, args| {
                         return {
@@ -54,7 +54,7 @@ pub fn build_function(action: Action, console: Identity, source: Rc<String>) -> 
         },
         loc: CodeLoc { line: 1, column: 1 },
     });
-    return JsObjectBuilder::new(None)
+    return JsObjectBuilder::new()
         .with_callable(JSCallable::Js {
             content: Rc::new("".to_string()),
             creator: Rc::new(FunctionInstance {
@@ -455,7 +455,6 @@ fn build_opcode_parts(
             }];
         }
         Action::Block(mut block) => {
-            let mut offset = offset;
             let mut result = Vec::new();
             let original_size = block.content.len();
             for (i, action) in block.content.drain(..).enumerate() {
