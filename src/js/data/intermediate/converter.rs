@@ -187,7 +187,7 @@ fn build_opcode_parts(
                 offset,
                 source,
             );
-            if !target.is_hole() {
+            if !target.write_ineffective() {
                 ret.push(Op {
                     target,
                     code: OpCode::Transfer {

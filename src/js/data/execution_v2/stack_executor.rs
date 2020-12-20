@@ -143,7 +143,10 @@ pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
                             stack.current_exception = Some(u_string("cannot call object"));
                             continue;
                         }
-                        JSCallable::Js { content: _, creator } => creator.clone(),
+                        JSCallable::Js {
+                            content: _,
+                            creator,
+                        } => creator.clone(),
                         JSCallable::Native { op } => {
                             let result = op.call(this_value, args_value);
                             match result {
@@ -379,6 +382,9 @@ fn capture_heap_var(target: &Target, stack: &mut Stack, _head: &FunctionHead) ->
         Target::BlackHole => {
             panic!("Cannot capture a black hole target!")
         }
+        Target::Static(_) => {
+            panic!("cannot capture a static value")
+        }
     }
 }
 
@@ -412,7 +418,10 @@ fn debug_op(stack: &Stack, op: &Op, instance: &Rc<FunctionInstance>) -> String {
         OpCode::Static { value } => {
             ret.push_str(&format!("Static <value='{}'>", value.to_log_string()))
         }
-        OpCode::CreateFunction { captures, template: _ } => {
+        OpCode::CreateFunction {
+            captures,
+            template: _,
+        } => {
             ret.push_str(&format!("CreateFunction <captures=",));
             for cap in captures {
                 ret.push_str(&target_read(cap, stack, instance).to_log_string());
@@ -525,6 +534,7 @@ fn debug_vartype(target: &Target) -> String {
         Target::Stack(n) => "[".to_string() + &n.to_string() + "]",
         Target::Global(v) => "[g:".to_string() + &v + "]",
         Target::BlackHole => "[hole]".to_string(),
+        Target::Static(v) => "[sc:".to_string() + v.to_system_string().as_str() + "]",
     }
 }
 
@@ -731,7 +741,11 @@ fn js_typeof(value: JsValue) -> Rc<String> {
     };
 }
 
-fn target_read(target: &Target, stack: &Stack, _current_function: &Rc<FunctionInstance>) -> JsValue {
+fn target_read(
+    target: &Target,
+    stack: &Stack,
+    _current_function: &Rc<FunctionInstance>,
+) -> JsValue {
     match target {
         Target::Stack(stack_pointer) => {
             match stack
@@ -768,6 +782,7 @@ fn target_read(target: &Target, stack: &Stack, _current_function: &Rc<FunctionIn
         Target::BlackHole => {
             return JsValue::Undefined;
         }
+        Target::Static(v) => v.clone(),
     }
 }
 
@@ -845,6 +860,9 @@ fn target_write(
             };
         }
         Target::BlackHole => {
+            return;
+        }
+        Target::Static(_) => {
             return;
         }
     }

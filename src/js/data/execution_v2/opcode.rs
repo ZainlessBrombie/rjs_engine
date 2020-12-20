@@ -19,15 +19,18 @@ pub enum Target {
     Stack(usize),
     /// Global object is stored at stack 0
     Global(Rc<String>),
+    /// Literal / Static JS value for inlining.
+    Static(JsValue),
     /// Don't put value anywhere. Undefined read, nop write.
     BlackHole,
 }
 
 impl Target {
     #[inline]
-    pub fn is_hole(&self) -> bool {
+    pub fn write_ineffective(&self) -> bool {
         match self {
             Target::BlackHole => true,
+            Target::Static(_) => true,
             _ => false,
         }
     }
@@ -216,6 +219,7 @@ impl Op {
                     depends_unknown = true;
                 } // TODO what about heap variables that have a ref on the stack?
                 Target::BlackHole => {}
+                Target::Static(_) => {}
             }
         }
         let mut stack_targets = vec![];
@@ -228,6 +232,7 @@ impl Op {
                     affects_unknown = true;
                 } // TODO what about heap variables that have a ref on the stack?
                 Target::BlackHole => {}
+                Target::Static(_) => {}
             }
         }
 

@@ -1,5 +1,6 @@
 pub mod converter;
 mod macros;
+mod optimizer;
 
 use crate::js::data::execution_v2::opcode::Arithmetic2Op;
 use crate::js::data::js_types::{Identity, JsValue};
