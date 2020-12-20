@@ -2,7 +2,7 @@ extern crate swc_ecma_parser;
 use self::swc_ecma_parser::JscTarget;
 use crate::js::data::execution_v2::stack_executor::run_stack;
 use crate::js::data::intermediate::converter::build_function;
-use crate::js::data::intermediate::{empty_var_access, VarAccessTrait};
+use crate::js::data::intermediate::empty_var_access;
 use crate::js::data::parsing::parse_module;
 use crate::js::data::std::build_std_global;
 use crate::js::data::util::s_pool;
@@ -72,8 +72,12 @@ a()
         })
         .unwrap();
 
-    let mut access = empty_var_access(None, false);
-    let module = parse_module(module, access, Rc::new(source.into()));
+    let global_access = empty_var_access(None, false);
+    let module = parse_module(
+        module,
+        empty_var_access(Some(global_access.clone()), false),
+        Rc::new(source.into()),
+    );
     let mut stack = js::data::execution_v2::Stack::create_stack(
         build_function(module, s_pool(source)),
         build_std_global(),

@@ -1,7 +1,5 @@
-use crate::js::data::execution_v2::opcode::{Op, OpCode};
-use std::collections::HashMap;
-
 // TODO I'll focus on optimizations once the language is complete or nearly complete
+/*
 pub fn optimize(ops: Vec<Op>) -> Vec<Op> {
     if ops.len() == 0 {
         return ops;
@@ -43,3 +41,4 @@ pub fn optimize(ops: Vec<Op>) -> Vec<Op> {
 
     unimplemented!()
 }
+*/

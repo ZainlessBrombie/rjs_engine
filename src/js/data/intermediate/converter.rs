@@ -2,13 +2,10 @@ use crate::js::data::execution_v2::constants::{BEGIN_VARS, JUMP_FLAG_LOCATION};
 use crate::js::data::execution_v2::function::{
     CodeSource, FunctionInstance, FunctionMeta, OpFunction,
 };
-use crate::js::data::execution_v2::native_fn::native_from;
 use crate::js::data::execution_v2::opcode::{Op, OpCode, Target};
-use crate::js::data::execution_v2::var::JsVar;
 use crate::js::data::intermediate::{Action, CodeLoc, LocatedAction};
 use crate::js::data::js_types::{Identity, JSCallable, JsValue};
-use crate::js::data::util::{s_pool, JsObjectBuilder};
-use safe_gc::{Gc, GcCell};
+use crate::js::data::util::JsObjectBuilder;
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 use std::rc::Rc;
@@ -53,16 +50,19 @@ pub fn build_function(action: Action, source: Rc<String>) -> JsValue {
 struct StackVarRepo {
     cur: usize,                      // Initialized to be after the captured heap vars
     by_id: HashMap<Identity, usize>, // Offsets from "base" - not var region
-    globals: HashMap<Identity, Rc<String>>
+    globals: HashMap<Identity, Rc<String>>,
 }
 
 // TODO naming
 impl StackVarRepo {
-    fn new(captures: HashMap<Identity, usize>, globals: HashMap<Identity, Rc<String>>) -> StackVarRepo {
+    fn new(
+        captures: HashMap<Identity, usize>,
+        globals: HashMap<Identity, Rc<String>>,
+    ) -> StackVarRepo {
         StackVarRepo {
             cur: BEGIN_VARS + captures.len(),
             by_id: captures,
-            globals
+            globals,
         }
     }
 
@@ -163,19 +163,12 @@ fn build_opcode_parts(
         }
         Action::VariableAssign(assign) => {
             let into = vars.get(&assign.var);
-            let mut ret = build_opcode_parts(
-                *assign.right_side,
-                into.clone(),
-                vars,
-                offset,
-                source,
-            );
+            let mut ret =
+                build_opcode_parts(*assign.right_side, into.clone(), vars, offset, source);
             if !target.write_ineffective() {
                 ret.push(Op {
                     target,
-                    code: OpCode::Transfer {
-                        from: into,
-                    },
+                    code: OpCode::Transfer { from: into },
                     loc: action.location,
                 });
             }
@@ -401,7 +394,7 @@ fn build_opcode_parts(
             for (i, id) in f.captures.iter().enumerate() {
                 captures.insert(id.clone(), i + BEGIN_VARS);
             }
-            
+
             for (id, name) in &f.globals {
                 globals.insert(*id, name.clone());
             }
@@ -432,11 +425,7 @@ fn build_opcode_parts(
                             code_source: CodeSource::String(source),
                         },
                     }),
-                    captures: f
-                        .captures
-                        .iter()
-                        .map(|id| vars.get(id))
-                        .collect(),
+                    captures: f.captures.iter().map(|id| vars.get(id)).collect(),
                 },
                 loc: action.location.clone(),
             }];
