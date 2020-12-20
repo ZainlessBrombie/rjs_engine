@@ -26,22 +26,14 @@ pub struct Stack {
 }
 
 impl Stack {
-    pub fn create_stack(function: JsValue) -> Stack {
-        let global = JsVar {
-            name: Rc::new("".to_string()),
-            value: Gc::new(GcCell::new(
-                JsObjectBuilder::new()
-                    .with_prop(Rc::new("type".into()), JsValue::String(s_pool("global")))
-                    .build(),
-            )),
-        };
+    pub fn create_stack(function: JsValue, global: JsValue) -> Stack {
         let function = JsVar {
-            name: Rc::new("".to_string()),
+            name: Rc::new("<initial_function>".to_string()),
             value: Gc::new(GcCell::new(function)),
         };
         Stack {
             values: vec![
-                StackElement::Value(global.get()),
+                StackElement::Value(global),
                 StackElement::FunctionHead(FunctionHead {
                     prev_function: 0,
                     execution: FunctionExecution {

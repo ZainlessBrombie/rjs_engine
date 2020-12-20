@@ -76,7 +76,7 @@ impl Mark for JSCallable {
 
 static IDENTITY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Mark, Clone, Debug)]
+#[derive(Mark, Clone, Copy, Debug)]
 pub struct Identity(u64); // Note: Name ist stored in object
 
 impl Identity {

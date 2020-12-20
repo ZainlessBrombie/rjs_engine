@@ -117,7 +117,7 @@ pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
                                             match stack
                                                 .values
                                                 .get(stack.current_function + *var)
-                                                .expect("Heap to short (unexpected)")
+                                                .expect("Heap too short (unexpected)")
                                             {
                                                 StackElement::HeapVar(var) => var.clone(),
                                                 _ => panic!("Uncapturable element!"),
@@ -164,10 +164,6 @@ pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
                             continue;
                         }
                     },
-                    // TODO Operations in JS can generally fail.
-                    // This means we have to go up the stack, step by step. We thus need to keep
-                    // An Option of an exception and walk up a step to the next best try catch
-                    // while it is set
                     _ => {
                         stack.current_exception = Some(u_string(
                             &("cannot call value: ".to_string()
@@ -216,7 +212,6 @@ pub fn run_stack(stack: &mut Stack, run_for: usize, do_print: bool) -> usize {
                 }
 
                 for _ in 0..head.execution.instance.code.number_of_vars {
-                    // TODO subtract heap var count
                     stack.values.push(StackElement::Value(JsValue::Undefined));
                 }
             }

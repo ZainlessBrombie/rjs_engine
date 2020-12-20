@@ -13,29 +13,8 @@ use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 use std::rc::Rc;
 
-pub fn build_function(action: Action, console: Identity, source: Rc<String>) -> JsValue {
-    let console_obj = JsObjectBuilder::new()
-        .with_prop(
-            s_pool("log"),
-            JsObjectBuilder::new()
-                .with_callable(JSCallable::Native {
-                    op: native_from(|_this, args| {
-                        return {
-                            println!("Print: {}", args.to_system_string());
-                            Ok(JsValue::Undefined)
-                        };
-                    }),
-                })
-                .build(),
-        )
-        .build();
-    let console_var = JsVar {
-        name: Rc::new("console".to_string()),
-        value: Gc::new(GcCell::new(console_obj)),
-    };
-    let mut map = HashMap::new();
-    map.insert(console, BEGIN_VARS);
-    let mut repo = StackVarRepo::new(map);
+pub fn build_function(action: Action, source: Rc<String>) -> JsValue {
+    let mut repo = StackVarRepo::new(HashMap::new(), HashMap::new());
 
     let mut ops = build_opcode_parts(
         LocatedAction {
@@ -65,7 +44,7 @@ pub fn build_function(action: Action, console: Identity, source: Rc<String>) -> 
                         code_source: CodeSource::String(source.clone()),
                     },
                 }),
-                heap_vars: Rc::new(vec![console_var.clone()]),
+                heap_vars: Rc::new(vec![]),
             }),
         })
         .build();
@@ -74,14 +53,16 @@ pub fn build_function(action: Action, console: Identity, source: Rc<String>) -> 
 struct StackVarRepo {
     cur: usize,                      // Initialized to be after the captured heap vars
     by_id: HashMap<Identity, usize>, // Offsets from "base" - not var region
+    globals: HashMap<Identity, Rc<String>>
 }
 
 // TODO naming
 impl StackVarRepo {
-    fn new(captures: HashMap<Identity, usize>) -> StackVarRepo {
+    fn new(captures: HashMap<Identity, usize>, globals: HashMap<Identity, Rc<String>>) -> StackVarRepo {
         StackVarRepo {
             cur: BEGIN_VARS + captures.len(),
             by_id: captures,
+            globals
         }
     }
 
@@ -90,13 +71,15 @@ impl StackVarRepo {
         return self.cur - 1;
     }
 
-    fn get(&mut self, id: &Identity) -> usize {
-        if let Some(found) = self.by_id.get(&id) {
-            return *found;
+    fn get(&mut self, id: &Identity) -> Target {
+        if let Some(global) = self.globals.get(id) {
+            return Target::Global(global.clone());
+        } else if let Some(found) = self.by_id.get(&id) {
+            return Target::Stack(*found);
         } else {
             let ret = self.allocate();
             self.by_id.insert(id.clone(), ret);
-            return ret;
+            return Target::Stack(ret);
         }
     }
 }
@@ -182,7 +165,7 @@ fn build_opcode_parts(
             let into = vars.get(&assign.var);
             let mut ret = build_opcode_parts(
                 *assign.right_side,
-                Target::Stack(into),
+                into.clone(),
                 vars,
                 offset,
                 source,
@@ -191,7 +174,7 @@ fn build_opcode_parts(
                 ret.push(Op {
                     target,
                     code: OpCode::Transfer {
-                        from: Target::Stack(into),
+                        from: into,
                     },
                     loc: action.location,
                 });
@@ -209,7 +192,7 @@ fn build_opcode_parts(
             return vec![Op {
                 target,
                 code: OpCode::Transfer {
-                    from: Target::Stack(vars.get(&read_var)),
+                    from: vars.get(&read_var),
                 },
                 loc: action.location,
             }];
@@ -413,12 +396,17 @@ fn build_opcode_parts(
         }
         Action::InstantiateFunction(f) => {
             let mut captures = HashMap::new();
+            let mut globals = HashMap::new();
 
             for (i, id) in f.captures.iter().enumerate() {
                 captures.insert(id.clone(), i + BEGIN_VARS);
             }
+            
+            for (id, name) in &f.globals {
+                globals.insert(*id, name.clone());
+            }
 
-            let mut repo = StackVarRepo::new(captures);
+            let mut repo = StackVarRepo::new(captures, globals);
             let mut instructions = build_opcode_parts(
                 f.content,
                 Target::BlackHole,
@@ -448,7 +436,6 @@ fn build_opcode_parts(
                         .captures
                         .iter()
                         .map(|id| vars.get(id))
-                        .map(|index| Target::Stack(index))
                         .collect(),
                 },
                 loc: action.location.clone(),

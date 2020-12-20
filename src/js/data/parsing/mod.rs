@@ -492,6 +492,7 @@ fn parse_function(f: Function, access: RcVarAccess, line_map: Rc<ColLineMap>) ->
                 location: line_map.loc_for(f.span.lo.0 as usize),
             },
             captures: access.known_heap_vars(),
+            globals: access.get_globals()
         })),
         location: line_map.loc_for(f.span.lo.0 as usize),
     };

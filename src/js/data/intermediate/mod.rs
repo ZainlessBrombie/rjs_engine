@@ -113,6 +113,7 @@ pub struct InstantiateFunction {
     //args: Vec<Action>,
     pub(crate) content: LocatedAction,
     pub(crate) captures: Vec<Identity>,
+    pub(crate) globals: HashMap<Identity, Rc<String>>,
 }
 
 pub struct AssignProp {
@@ -207,14 +208,18 @@ pub trait VarAccessTrait {
     fn local_declare(&mut self, name: Rc<String>) -> Identity;
 
     fn register_local(&self, id: Identity);
+
+    fn get_globals(&self) -> HashMap<Identity, Rc<String>>;
 }
 
 impl VarAccessTrait for Rc<RefCell<VarAccess>> {
     fn known_heap_vars(&self) -> Vec<Identity> {
+        let globals = self.get_globals(); // TODO being computed twice. Also not pretty
         self.borrow_mut()
             .known_heap_vars
             .iter()
             .map(|i| i.clone())
+            .filter(|i| !globals.contains_key(i))
             .collect()
     }
 
@@ -229,6 +234,20 @@ impl VarAccessTrait for Rc<RefCell<VarAccess>> {
 
     fn get_or_global(&mut self, name: &Rc<String>) -> Identity {
         self.get_or_global_internal(name, false)
+    }
+
+    fn get_globals(&self) -> HashMap<Identity, Rc<String>> {
+        if let Some(prev) = &self.borrow().prev {
+            return prev.get_globals();
+        } else {
+            let mut ret = HashMap::new();
+
+            for (name, id) in &self.borrow().vars {
+                ret.insert(id.id, name.clone());
+            }
+
+            return ret;
+        }
     }
 
     /// stack_broken means we have crossed a heap boundary and need to capture.
@@ -249,17 +268,18 @@ impl VarAccessTrait for Rc<RefCell<VarAccess>> {
                     ref_mut.known_heap_vars.insert(ret.clone());
                 }
                 return ret;
+            } else {
+                let ret = Identity::new();
+                ref_mut.vars.insert(
+                    name.clone(),
+                    VarRef {
+                        id: ret.clone(),
+                        is_local: false,
+                    },
+                );
+                ref_mut.known_heap_vars.insert(ret.clone());
+                return ret;
             }
-            let ret = Identity::new();
-            ref_mut.vars.insert(
-                name.clone(),
-                VarRef {
-                    id: ret.clone(),
-                    is_local: false,
-                },
-            );
-            ref_mut.known_heap_vars.insert(ret.clone());
-            return ret;
         }
     }
 
