@@ -12,22 +12,8 @@ use std::rc::Rc;
 use std::time::Instant;
 use swc_common::errors::{DiagnosticBuilder, Emitter};
 use swc_common::sync::Lrc;
-use swc_common::{errors::Handler, FileName, SourceMap};
-use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax};
-
-struct Empty {}
-
-impl Emitter for Empty {
-    fn emit(&mut self, db: &DiagnosticBuilder<'_>) {
-        for (str, _) in db.styled_message() {
-            println!("{}", str)
-        }
-    }
-
-    fn should_show_explain(&self) -> bool {
-        true
-    }
-}
+use swc_common::SourceMap;
+use swc_ecma_parser::Parser;
 
 struct TempFix {}
 
@@ -42,8 +28,6 @@ impl Write for TempFix {
 }
 
 pub fn m1() {
-    let cm: Lrc<SourceMap> = Default::default();
-    let handler = Handler::with_emitter(true, false, Box::new(Empty {}));
     let source = "
 function a() {
     console.log('A called');
@@ -52,34 +36,10 @@ function a() {
 a()
 
 ";
-    let fm = cm.new_source_file(FileName::Custom("test.js".into()), source.into());
-    let lexer = Lexer::new(
-        Syntax::Es(Default::default()),
-        JscTarget::Es2020,
-        StringInput::from(&*fm),
-        None,
-    );
-    let mut parser = Parser::new_from(lexer);
-
-    let module = parser
-        .parse_module()
-        .map_err(|err| {
-            println!("{:?}", err.into_diagnostic(&handler).span);
-            for e in parser.take_errors() {
-                e.into_diagnostic(&handler).emit();
-            }
-            panic!()
-        })
-        .unwrap();
 
     let global_access = empty_var_access(None, false);
-    let module = parse_module(
-        module,
-        empty_var_access(Some(global_access.clone()), false),
-        Rc::new(source.into()),
-    );
     let mut stack = js::data::execution_v2::Stack::create_stack(
-        build_function(module, s_pool(source)),
+        build_function(),
         build_std_global(),
     );
 

@@ -1,26 +1,82 @@
 use crate::js::data::execution_v2::opcode::Arithmetic2Op;
+use crate::js::data::intermediate::converter::build_function;
 use crate::js::data::intermediate::{
     empty_var_access, Action, Arithmetic2Action, AssignProp, CallFunction, CodeLoc, For, IfElse,
     InstantiateFunction, LeftRight, LocatedAction, NewObject, ScopedBlock, VarAccess,
     VarAccessTrait, VarAssign, While,
 };
 use crate::js::data::js_types::{Identity, JsValue};
+use crate::js::data::std::build_std_global;
 use crate::js::data::util::col_line_map::ColLineMap;
-use crate::js::data::util::u_string;
+use crate::js::data::util::{s_pool, u_string};
 use crate::*;
 use std::cell::RefCell;
 use std::rc::Rc;
-use swc_common::Spanned;
+use swc_common::errors::{DiagnosticBuilder, Emitter, Handler};
+use swc_common::sync::Lrc;
+use swc_common::{FileName, SourceMap, Spanned};
 use swc_ecma_ast::{
     BinaryOp, Decl, EmptyStmt, Expr, ExprOrSuper, Function, Lit, ModuleItem, Pat, PatOrExpr, Stmt,
     VarDeclOrExpr,
 };
+use swc_ecma_parser::lexer::Lexer;
+use swc_ecma_parser::{JscTarget, Parser, StringInput, Syntax};
 
 thread_local! {
     static THIS_ID: Identity = Identity::new();
     static ARGS_ID: Identity = Identity::new();
 }
 type RcVarAccess = Rc<RefCell<VarAccess>>;
+
+struct EmptyEmitter {}
+
+impl Emitter for EmptyEmitter {
+    fn emit(&mut self, db: &DiagnosticBuilder<'_>) {
+        for (str, _) in db.styled_message() {
+            println!("{}", str)
+        }
+    }
+
+    fn should_show_explain(&self) -> bool {
+        true
+    }
+}
+
+pub fn parse_module_from_string(
+    parent_access: RcVarAccess,
+    filename: String,
+    source: Rc<String>,
+) -> Action {
+    let cm: Rc<SourceMap> = Default::default();
+    let handler = Handler::with_emitter(true, false, Box::new(EmptyEmitter {}));
+
+    let fm = cm.new_source_file(FileName::Custom(filename), source.to_string());
+    let lexer = Lexer::new(
+        Syntax::Es(Default::default()),
+        JscTarget::Es2020,
+        StringInput::from(&*fm),
+        None,
+    );
+
+    let mut parser = Parser::new_from(lexer);
+
+    let module = parser
+        .parse_module()
+        .map_err(|err| {
+            println!("{:?}", err.into_diagnostic(&handler).span);
+            for e in parser.take_errors() {
+                e.into_diagnostic(&handler).emit();
+            }
+            panic!()
+        })
+        .unwrap();
+
+    return parse_module(
+        module,
+        empty_var_access(Some(parent_access.clone()), false),
+        source.clone(),
+    );
+}
 
 pub fn parse_module(module: swc_ecma_ast::Module, vars: RcVarAccess, source: Rc<String>) -> Action {
     let line_map = Rc::new(ColLineMap::new(source.as_str()));
@@ -492,7 +548,7 @@ fn parse_function(f: Function, access: RcVarAccess, line_map: Rc<ColLineMap>) ->
                 location: line_map.loc_for(f.span.lo.0 as usize),
             },
             captures: access.known_heap_vars(),
-            globals: access.get_globals()
+            globals: access.get_globals(),
         })),
         location: line_map.loc_for(f.span.lo.0 as usize),
     };

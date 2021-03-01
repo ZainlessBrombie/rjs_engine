@@ -1,3 +1,5 @@
+pub mod resolver;
+
 use crate::js::data::execution_v2::native_fn::native_from;
 use crate::js::data::js_types::{JSCallable, JsValue};
 use crate::js::data::util::{s_pool, JsObjectBuilder};
